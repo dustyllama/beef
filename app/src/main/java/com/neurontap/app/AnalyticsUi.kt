@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material3.AlertDialog
@@ -44,6 +45,7 @@ fun WrappedContent(db: NeuronDb) {
     val scope = rememberCoroutineScope()
     var stats by remember { mutableStateOf(WrappedStats()) }
     var csvToWrite by remember { mutableStateOf<String?>(null) }
+    var confirmReset by remember { mutableStateOf(false) }
     suspend fun refresh() { stats = withContext(Dispatchers.IO) { db.wrappedStats() } }
     LaunchedEffect(Unit) { refresh() }
 
@@ -53,6 +55,24 @@ fun WrappedContent(db: NeuronDb) {
         csvToWrite = null
     }
 
+    if (confirmReset) {
+        AlertDialog(
+            onDismissRequest = { confirmReset = false },
+            title = { Text("Reset Horny Archives?") },
+            text = { Text("This permanently clears sessions and behavioral events. Your media and favorites stay intact.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmReset = false
+                    scope.launch {
+                        withContext(Dispatchers.IO) { db.clearBehaviorHistory() }
+                        refresh()
+                    }
+                }) { Text("Reset") }
+            },
+            dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("Cancel") } }
+        )
+    }
+
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -60,28 +80,64 @@ fun WrappedContent(db: NeuronDb) {
                 IconButton(onClick = { scope.launch { csvToWrite = withContext(Dispatchers.IO) { db.exportCsv() }; exportLauncher.launch("neurontap-events.csv") } }) {
                     Icon(Icons.Default.SaveAlt, "Export metadata CSV")
                 }
+                IconButton(onClick = { confirmReset = true }) { Icon(Icons.Default.DeleteForever, "Reset statistics") }
             }
         }
+        item { Text("Horny Archives", style = MaterialTheme.typography.headlineMedium) }
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatCard("Taps", stats.taps.toString(), Modifier.weight(1f))
                 StatCard("Sessions", stats.sessions.toString(), Modifier.weight(1f))
-                StatCard("Finishes", stats.finishes.toString(), Modifier.weight(1f))
+                StatCard("Confirmed nuts", stats.finishes.toString(), Modifier.weight(1f))
             }
         }
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatCard("Potential nuts", stats.potentialNuts.toString(), Modifier.weight(1f))
+                StatCard("Spiritual Cooms", stats.spiritualCooms.toString(), Modifier.weight(1f))
+                StatCard("Edge marks", stats.edgeMarks.toString(), Modifier.weight(1f))
+            }
+        }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatCard("Instant hard", stats.instantHardMarks.toString(), Modifier.weight(1f))
                 StatCard("Fastest tap", stats.quickestFirstTapMs?.let(::formatMs) ?: "—", Modifier.weight(1f))
                 StatCard("Longest stare", stats.longestDwellMs?.let(::formatMs) ?: "—", Modifier.weight(1f))
+            }
+        }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatCard("Active hour", stats.mostActiveHour?.let(::formatHour) ?: "—", Modifier.weight(1f))
             }
         }
+
+        if (stats.potentialNutCandidates.isNotEmpty()) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Potential nuts", style = MaterialTheme.typography.titleLarge)
+                    Text("These are calculator guesses only. They never become confirmed nuts unless you explicitly log one.", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            items(stats.potentialNutCandidates) { candidate ->
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(candidate.primaryMediaName ?: "Unknown media", style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                        Text("${(candidate.confidence * 100).toInt()}% potential-nut confidence")
+                        if (candidate.evidence.isNotBlank()) Text(candidate.evidence, style = MaterialTheme.typography.bodySmall)
+                        if (candidate.windowStartMs != null && candidate.windowEndMs != null) {
+                            Text("Estimated window ${formatMs(candidate.windowEndMs - candidate.windowStartMs)}", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        }
+
         item { Text("Top behavioral hits", style = MaterialTheme.typography.titleLarge) }
         items(stats.topMedia) { score ->
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp)) {
                     Text(score.name, style = MaterialTheme.typography.titleMedium, maxLines = 1)
-                    Text("${score.taps} taps · ${formatMs(score.dwellMs)} dwell · ${score.sessionCount} sessions · ${score.finishCount} inferred finishes")
+                    Text("${score.taps} taps · ${formatMs(score.dwellMs)} dwell · ${score.sessionCount} sessions · ${score.finishCount} inferred/linked finishes")
                     Text("Reaction score ${String.format(Locale.US, "%.1f", score.score)}")
                 }
             }
