@@ -2,6 +2,7 @@ package com.neurontap.app
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -76,8 +77,8 @@ private fun NeuronTapApp(controller: AppController) {
             onOpenWrapped = { page = AppPage.WRAPPED },
             onOpenTags = { page = AppPage.TAGS }
         )
-        AppPage.WRAPPED -> AnalyticsScaffold("Wrapped", onBack = { page = AppPage.COLLECTION }) {
-            WrappedContent(controller.db)
+        AppPage.WRAPPED -> AnalyticsScaffold("Horny Archives", onBack = { page = AppPage.COLLECTION }) {
+            WrappedContent(controller)
         }
         AppPage.TAGS -> AnalyticsScaffold("Tag Lab", onBack = { page = AppPage.COLLECTION }) {
             TagLabContent(controller.db)
@@ -88,6 +89,7 @@ private fun NeuronTapApp(controller: AppController) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AnalyticsScaffold(title: String, onBack: () -> Unit, content: @Composable () -> Unit) {
+    BackHandler { onBack() }
     Scaffold(
         containerColor = Color.Black,
         topBar = {
