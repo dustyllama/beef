@@ -29,36 +29,37 @@ class AppController(private val context: Context, val db: NeuronDb) {
         lastBackgroundAt = now
     }
 
-    fun log(mediaId: Long?, type: String, value: Long? = null, mediaPositionMs: Long? = null, at: Long = System.currentTimeMillis()) {
-        db.logEvent(ensureSession(), mediaId, type, at, value, mediaPositionMs)
+    fun log(
+        mediaId: Long?,
+        type: String,
+        value: Long? = null,
+        mediaPositionMs: Long? = null,
+        x: Double? = null,
+        y: Double? = null,
+        details: String? = null,
+        at: Long = System.currentTimeMillis()
+    ) {
+        db.logEvent(ensureSession(), mediaId, type, at, value, mediaPositionMs, x, y, details)
     }
 
-    /**
-     * A confirmed nut is ground truth supplied by the user. The optional mediaId records
-     * what was actually on screen at confirmation time; the broader active window can
-     * still be inferred separately from the raw event history.
-     */
-    fun confirmFinish(mediaId: Long? = null): Pair<FinishInference, MediaItem?> {
+    fun confirmFinish(mediaId: Long? = null, mediaPositionMs: Long? = null): Pair<FinishInference, MediaItem?> {
         val now = System.currentTimeMillis()
         val id = ensureSession()
-        db.confirmFinish(id, now, mediaId)
+        db.confirmFinish(id, now, mediaId, mediaPositionMs)
         val inference = AnalyticsEngine.inferFinish(db.eventsForSession(id), now)
         db.saveInference(id, inference)
         val resolvedMediaId = mediaId ?: inference.mediaId
         return inference to resolvedMediaId?.let(db::mediaById)
     }
 
-    fun markSpiritualCoom(mediaId: Long, mediaPositionMs: Long? = null) {
+    fun markSpiritualCoom(mediaId: Long, mediaPositionMs: Long? = null) =
         log(mediaId, EventTypes.SPIRITUAL_COOM, mediaPositionMs = mediaPositionMs)
-    }
 
-    fun markInstantHard(mediaId: Long, mediaPositionMs: Long? = null) {
+    fun markInstantHard(mediaId: Long, mediaPositionMs: Long? = null) =
         log(mediaId, EventTypes.INSTANT_HARD, mediaPositionMs = mediaPositionMs)
-    }
 
-    fun markEdge(mediaId: Long, mediaPositionMs: Long? = null) {
+    fun markEdge(mediaId: Long, mediaPositionMs: Long? = null) =
         log(mediaId, EventTypes.EDGE_MARK, mediaPositionMs = mediaPositionMs)
-    }
 
     private fun ensureSession(): String {
         if (sessionId == null) onForeground()
