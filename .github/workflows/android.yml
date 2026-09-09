@@ -2,7 +2,7 @@ name: Android Debug APK
 
 on:
   push:
-    branches: [ master, main, neurontap-build, aves-v2 ]
+    branches: [ master, main, neurontap-build, aves-v2, horny-archives-v3 ]
   workflow_dispatch:
 
 jobs:
