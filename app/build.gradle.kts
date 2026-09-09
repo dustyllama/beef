@@ -16,7 +16,19 @@ android {
         versionName = "0.2.0"
     }
 
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("neurontap-debug.jks")
+            storePassword = "neurontap"
+            keyAlias = "neurontap"
+            keyPassword = "neurontap"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
