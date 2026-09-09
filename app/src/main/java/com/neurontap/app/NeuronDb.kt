@@ -127,6 +127,7 @@ class NeuronDb(context: Context) : SQLiteOpenHelper(context, "neurontap.db", nul
     fun endSession(id: String, now: Long) {
         val values = ContentValues().apply { put("ended_at", now) }
         writableDatabase.update("sessions", values, "id=?", arrayOf(id))
+        logEvent(id, null, EventTypes.SESSION_END, now)
     }
 
     fun logEvent(sessionId: String, mediaId: Long?, type: String, timestampMs: Long, value: Long? = null, mediaPositionMs: Long? = null) {
@@ -141,10 +142,11 @@ class NeuronDb(context: Context) : SQLiteOpenHelper(context, "neurontap.db", nul
         writableDatabase.insert("events", null, values)
     }
 
-    fun confirmFinish(sessionId: String, now: Long) {
+    fun confirmFinish(sessionId: String, now: Long, mediaId: Long? = null) {
         val values = ContentValues().apply { put("finish_confirmed", 1); put("finish_confirmed_at", now) }
         writableDatabase.update("sessions", values, "id=?", arrayOf(sessionId))
-        logEvent(sessionId, null, EventTypes.COMPLETION_CONFIRMED, now)
+        // This is the bespoke, explicit record. Potential nuts never write this event.
+        logEvent(sessionId, mediaId, EventTypes.CONFIRMED_NUT, now)
     }
 
     fun saveInference(sessionId: String, inference: FinishInference) {
@@ -164,6 +166,31 @@ class NeuronDb(context: Context) : SQLiteOpenHelper(context, "neurontap.db", nul
         buildList {
             while (c.moveToNext()) {
                 add(EventRow(c.getLong(0), c.getString(1), if (c.isNull(2)) null else c.getLong(2), c.getString(3), c.getLong(4), if (c.isNull(5)) null else c.getLong(5), if (c.isNull(6)) null else c.getLong(6)))
+            }
+        }
+    }
+
+    fun sessionsForInference(limit: Int = 250): List<SessionRow> = readableDatabase.rawQuery(
+        """SELECT id,started_at,ended_at,finish_confirmed,finish_confirmed_at,
+                  inferred_primary_media_id,inference_confidence,inferred_window_start,inferred_window_end
+           FROM sessions ORDER BY started_at DESC LIMIT ?""".trimIndent(),
+        arrayOf(limit.toString())
+    ).use { c ->
+        buildList {
+            while (c.moveToNext()) {
+                add(
+                    SessionRow(
+                        id = c.getString(0),
+                        startedAt = c.getLong(1),
+                        endedAt = if (c.isNull(2)) null else c.getLong(2),
+                        confirmedNut = c.getInt(3) != 0,
+                        confirmedNutAt = if (c.isNull(4)) null else c.getLong(4),
+                        inferredPrimaryMediaId = if (c.isNull(5)) null else c.getLong(5),
+                        inferenceConfidence = if (c.isNull(6)) null else c.getDouble(6),
+                        inferredWindowStart = if (c.isNull(7)) null else c.getLong(7),
+                        inferredWindowEnd = if (c.isNull(8)) null else c.getLong(8)
+                    )
+                )
             }
         }
     }
@@ -207,10 +234,14 @@ class NeuronDb(context: Context) : SQLiteOpenHelper(context, "neurontap.db", nul
         }
     }
 
+    fun countEvents(type: String): Int = readableDatabase.rawQuery(
+        "SELECT COUNT(*) FROM events WHERE type=?", arrayOf(type)
+    ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+
     fun wrappedStats(): WrappedStats {
         val db = readableDatabase
         fun scalarLong(sql: String): Long? = db.rawQuery(sql, null).use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null }
-        val taps = scalarLong("SELECT COUNT(*) FROM events WHERE type='REACTION_UP'")?.toInt() ?: 0
+        val taps = countEvents(EventTypes.REACTION_UP)
         val sessions = scalarLong("SELECT COUNT(*) FROM sessions")?.toInt() ?: 0
         val finishes = scalarLong("SELECT COUNT(*) FROM sessions WHERE finish_confirmed=1")?.toInt() ?: 0
         val fastest = scalarLong("SELECT MIN(value) FROM events WHERE type='FIRST_TAP_LATENCY'")
@@ -220,7 +251,21 @@ class NeuronDb(context: Context) : SQLiteOpenHelper(context, "neurontap.db", nul
                FROM events WHERE type='REACTION_UP' GROUP BY h ORDER BY c DESC LIMIT 1""",
             null
         ).use { c -> if (c.moveToFirst()) c.getInt(0) else null }
-        return WrappedStats(taps, sessions, finishes, fastest, longest, activeHour, topMedia(10))
+        val potential = AnalyticsEngine.inferPotentialNuts(this, 250)
+        return WrappedStats(
+            taps = taps,
+            sessions = sessions,
+            finishes = finishes,
+            potentialNuts = potential.size,
+            spiritualCooms = countEvents(EventTypes.SPIRITUAL_COOM),
+            instantHardMarks = countEvents(EventTypes.INSTANT_HARD),
+            edgeMarks = countEvents(EventTypes.EDGE_MARK),
+            quickestFirstTapMs = fastest,
+            longestDwellMs = longest,
+            mostActiveHour = activeHour,
+            topMedia = topMedia(10),
+            potentialNutCandidates = potential.take(20)
+        )
     }
 
     fun clearBehaviorHistory() {
