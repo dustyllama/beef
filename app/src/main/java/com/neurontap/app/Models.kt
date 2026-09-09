@@ -7,7 +7,8 @@ data class MediaItem(
     val name: String,
     val mime: String,
     val size: Long,
-    val modified: Long
+    val modified: Long,
+    val favorite: Boolean = false
 ) {
     val isVideo: Boolean get() = mime.startsWith("video/")
 }

@@ -7,7 +7,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import java.security.MessageDigest
 
-class NeuronDb(context: Context) : SQLiteOpenHelper(context, "neurontap.db", null, 1) {
+class NeuronDb(context: Context) : SQLiteOpenHelper(context, "neurontap.db", null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """CREATE TABLE media(
@@ -18,7 +18,8 @@ class NeuronDb(context: Context) : SQLiteOpenHelper(context, "neurontap.db", nul
                 mime TEXT NOT NULL,
                 size INTEGER NOT NULL DEFAULT 0,
                 modified INTEGER NOT NULL DEFAULT 0,
-                indexed_at INTEGER NOT NULL
+                indexed_at INTEGER NOT NULL,
+                favorite INTEGER NOT NULL DEFAULT 0
             )""".trimIndent()
         )
         db.execSQL(
@@ -56,7 +57,22 @@ class NeuronDb(context: Context) : SQLiteOpenHelper(context, "neurontap.db", nul
         )
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE media ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+
+    fun runMediaBatch(block: () -> Unit) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            block()
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
 
     fun upsertMedia(rootUri: String, uri: String, name: String, mime: String, size: Long, modified: Long): Long {
         val db = writableDatabase
@@ -76,20 +92,35 @@ class NeuronDb(context: Context) : SQLiteOpenHelper(context, "neurontap.db", nul
         }
     }
 
+    fun loadAllMedia(): List<MediaItem> = readableDatabase.rawQuery(
+        "SELECT id,root_uri,uri,display_name,mime,size,modified,favorite FROM media ORDER BY modified DESC, display_name COLLATE NOCASE",
+        null
+    ).use { c -> buildList { while (c.moveToNext()) add(c.toMediaItem()) } }
+
     fun loadMedia(rootUri: String): List<MediaItem> = readableDatabase.rawQuery(
-        "SELECT id,root_uri,uri,display_name,mime,size,modified FROM media WHERE root_uri=? ORDER BY display_name COLLATE NOCASE",
+        "SELECT id,root_uri,uri,display_name,mime,size,modified,favorite FROM media WHERE root_uri=? ORDER BY modified DESC, display_name COLLATE NOCASE",
         arrayOf(rootUri)
     ).use { c -> buildList { while (c.moveToNext()) add(c.toMediaItem()) } }
 
     fun mediaById(id: Long): MediaItem? = readableDatabase.rawQuery(
-        "SELECT id,root_uri,uri,display_name,mime,size,modified FROM media WHERE id=?", arrayOf(id.toString())
+        "SELECT id,root_uri,uri,display_name,mime,size,modified,favorite FROM media WHERE id=?", arrayOf(id.toString())
     ).use { c -> if (c.moveToFirst()) c.toMediaItem() else null }
 
+    fun setFavorite(mediaId: Long, favorite: Boolean) {
+        val values = ContentValues().apply { put("favorite", if (favorite) 1 else 0) }
+        writableDatabase.update("media", values, "id=?", arrayOf(mediaId.toString()))
+    }
+
+    fun deleteMedia(mediaId: Long) {
+        writableDatabase.delete("media", "id=?", arrayOf(mediaId.toString()))
+    }
+
+    fun deleteRoot(rootUri: String) {
+        writableDatabase.delete("media", "root_uri=?", arrayOf(rootUri))
+    }
+
     fun startSession(id: String, now: Long) {
-        val values = ContentValues().apply {
-            put("id", id)
-            put("started_at", now)
-        }
+        val values = ContentValues().apply { put("id", id); put("started_at", now) }
         writableDatabase.insertWithOnConflict("sessions", null, values, SQLiteDatabase.CONFLICT_IGNORE)
     }
 
@@ -111,10 +142,7 @@ class NeuronDb(context: Context) : SQLiteOpenHelper(context, "neurontap.db", nul
     }
 
     fun confirmFinish(sessionId: String, now: Long) {
-        val values = ContentValues().apply {
-            put("finish_confirmed", 1)
-            put("finish_confirmed_at", now)
-        }
+        val values = ContentValues().apply { put("finish_confirmed", 1); put("finish_confirmed_at", now) }
         writableDatabase.update("sessions", values, "id=?", arrayOf(sessionId))
         logEvent(sessionId, null, EventTypes.COMPLETION_CONFIRMED, now)
     }
@@ -135,17 +163,7 @@ class NeuronDb(context: Context) : SQLiteOpenHelper(context, "neurontap.db", nul
     ).use { c ->
         buildList {
             while (c.moveToNext()) {
-                add(
-                    EventRow(
-                        id = c.getLong(0),
-                        sessionId = c.getString(1),
-                        mediaId = if (c.isNull(2)) null else c.getLong(2),
-                        type = c.getString(3),
-                        timestampMs = c.getLong(4),
-                        value = if (c.isNull(5)) null else c.getLong(5),
-                        mediaPositionMs = if (c.isNull(6)) null else c.getLong(6)
-                    )
-                )
+                add(EventRow(c.getLong(0), c.getString(1), if (c.isNull(2)) null else c.getLong(2), c.getString(3), c.getLong(4), if (c.isNull(5)) null else c.getLong(5), if (c.isNull(6)) null else c.getLong(6)))
             }
         }
     }
@@ -220,8 +238,7 @@ class NeuronDb(context: Context) : SQLiteOpenHelper(context, "neurontap.db", nul
         val header = "event_id,session_id,media_id,type,timestamp_ms,value,media_position_ms\n"
         val rows = readableDatabase.rawQuery(
             """SELECT e.id,e.session_id,m.uri,e.type,e.timestamp_ms,e.value,e.media_position_ms
-               FROM events e LEFT JOIN media m ON m.id=e.media_id ORDER BY e.timestamp_ms""",
-            null
+               FROM events e LEFT JOIN media m ON m.id=e.media_id ORDER BY e.timestamp_ms""", null
         ).use { c ->
             buildString {
                 while (c.moveToNext()) {
@@ -239,7 +256,7 @@ class NeuronDb(context: Context) : SQLiteOpenHelper(context, "neurontap.db", nul
     }
 
     private fun Cursor.toMediaItem() = MediaItem(
-        id = getLong(0), rootUri = getString(1), uri = getString(2), name = getString(3), mime = getString(4), size = getLong(5), modified = getLong(6)
+        id = getLong(0), rootUri = getString(1), uri = getString(2), name = getString(3), mime = getString(4), size = getLong(5), modified = getLong(6), favorite = getInt(7) != 0
     )
 
     private fun shortHash(value: String): String {
