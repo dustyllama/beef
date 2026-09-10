@@ -107,11 +107,15 @@ jobs:
       - name: Android lint
         run: gradle :app:lintDebug --stacktrace
 
-      - name: Emulator torture smoke test
-        run: bash tools/v8_emulator_smoke.sh app/build/outputs/apk/debug/app-debug.apk
-
-      - name: Upload APK
+      # Publish the exact candidate that passed compilation + lint before the
+      # expensive emulator abuse pass. The workflow itself is still only green
+      # if the torture test passes, but a field-test APK is not held hostage by
+      # emulator infrastructure/setup failures.
+      - name: Upload candidate APK
         uses: actions/upload-artifact@v4
         with:
           name: neurontap-v0.8-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Emulator torture smoke test
+        run: bash tools/v8_emulator_smoke.sh app/build/outputs/apk/debug/app-debug.apk
