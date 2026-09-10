@@ -2,7 +2,7 @@ name: Android Debug APK
 
 on:
   push:
-    branches: [ master, main, neurontap-build, aves-v2, horny-archives-v3, neurontap-v4, neurontap-v5-rc1 ]
+    branches: [ master, main, neurontap-build, aves-v2, horny-archives-v3, neurontap-v4, neurontap-v5-rc1, neurontap-v6 ]
   workflow_dispatch:
 
 jobs:
@@ -32,11 +32,17 @@ jobs:
       - name: Apply v0.5 field-test patch
         run: python3 tools/apply_v5_feedback.py
 
+      - name: Apply v0.6 core patch
+        run: python3 tools/apply_v6_core.py
+
+      - name: Apply v0.6 viewer patch
+        run: python3 tools/apply_v6_viewer.py
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: neurontap-v0.5-apk
+          name: neurontap-v0.6-apk
           path: app/build/outputs/apk/debug/app-debug.apk
