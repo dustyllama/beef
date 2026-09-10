@@ -2,7 +2,7 @@ name: Android Debug APK
 
 on:
   push:
-    branches: [ master, main, neurontap-build, aves-v2, horny-archives-v3, neurontap-v4, neurontap-v5-rc1, neurontap-v6, neurontap-v7 ]
+    branches: [ master, main, neurontap-build, aves-v2, horny-archives-v3, neurontap-v4, neurontap-v5-rc1, neurontap-v6, neurontap-v7, neurontap-v7-rescue ]
   workflow_dispatch:
 
 jobs:
@@ -70,11 +70,29 @@ jobs:
       - name: Apply v0.7 compile fixes
         run: python3 tools/fix_v7_compile1.py
 
-      - name: Build debug APK
+      - name: Make rescue build install over v0.8
+        run: |
+          sed -i 's/versionCode = 7/versionCode = 9/' app/build.gradle.kts
+          sed -i 's/versionName = "0.7.0"/versionName = "0.7.1-rescue"/' app/build.gradle.kts
+          grep -q 'versionCode = 9' app/build.gradle.kts
+          grep -q 'versionName = "0.7.1-rescue"' app/build.gradle.kts
+
+      - name: Build rescue APK
         run: gradle :app:assembleDebug --stacktrace
 
-      - name: Upload APK
+      - name: Android lint
+        run: gradle :app:lintDebug --stacktrace
+
+      - name: Verify rescue identity and signature
+        run: |
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          "$AAPT" dump badging app/build/outputs/apk/debug/app-debug.apk | tee /tmp/badging.txt
+          grep -q "package: name='com.neurontap.app' versionCode='9' versionName='0.7.1-rescue'" /tmp/badging.txt
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload rescue APK
         uses: actions/upload-artifact@v4
         with:
-          name: neurontap-v0.7-apk
+          name: neurontap-v0.7-rescue-apk
           path: app/build/outputs/apk/debug/app-debug.apk
