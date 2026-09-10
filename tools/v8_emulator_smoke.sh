@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APK="${1:-app/build/outputs/apk/debug/app-debug.apk}"
+AVD_NAME="neurontap_v8_smoke"
+IMAGE="system-images;android-35;google_apis;x86_64"
+
+fail() { echo "SMOKE FAILURE: $*" >&2; exit 1; }
+app_alive() { adb shell pidof com.neurontap.app 2>/dev/null | grep -q '[0-9]'; }
+assert_alive() { app_alive || fail "NeuronTap process died during $1"; }
+
+# Accessibility-first tap helper. Keeps the test independent of a particular
+# emulator resolution and catches basic Compose navigation regressions.
+tap_desc() {
+  local needle="$1"
+  adb shell uiautomator dump /sdcard/nt-window.xml >/dev/null 2>&1 || true
+  adb exec-out cat /sdcard/nt-window.xml > /tmp/nt-window.xml 2>/dev/null || true
+  local xy
+  xy=$(python3 - "$needle" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+needle = sys.argv[1].lower()
+try:
+    root = ET.parse('/tmp/nt-window.xml').getroot()
+except Exception:
+    sys.exit(1)
+for node in root.iter('node'):
+    desc = node.attrib.get('content-desc','').lower()
+    text = node.attrib.get('text','').lower()
+    if needle in desc or needle == text:
+        m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', node.attrib.get('bounds',''))
+        if m:
+            x1,y1,x2,y2 = map(int,m.groups())
+            print((x1+x2)//2, (y1+y2)//2)
+            sys.exit(0)
+sys.exit(1)
+PY
+  ) || return 1
+  read -r x y <<<"$xy"
+  adb shell input tap "$x" "$y"
+}
+
+swipe_seekbar() {
+  local direction="$1"
+  adb shell uiautomator dump /sdcard/nt-window.xml >/dev/null 2>&1 || true
+  adb exec-out cat /sdcard/nt-window.xml > /tmp/nt-window.xml 2>/dev/null || true
+  local coords
+  coords=$(python3 - "$direction" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+direction = sys.argv[1]
+try:
+    root = ET.parse('/tmp/nt-window.xml').getroot()
+except Exception:
+    sys.exit(1)
+for node in root.iter('node'):
+    cls = node.attrib.get('class','')
+    if 'SeekBar' in cls:
+        m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', node.attrib.get('bounds',''))
+        if not m: continue
+        x1,y1,x2,y2 = map(int,m.groups())
+        y=(y1+y2)//2
+        a=x1 + (x2-x1)//5
+        b=x1 + 4*(x2-x1)//5
+        if direction == 'back': a,b=b,a
+        print(a,y,b,y)
+        sys.exit(0)
+sys.exit(1)
+PY
+  ) || return 1
+  read -r x1 y1 x2 y2 <<<"$coords"
+  adb shell input swipe "$x1" "$y1" "$x2" "$y2" 220
+}
+
+echo "Installing emulator image..."
+yes | sdkmanager "$IMAGE" >/dev/null
+printf 'no\n' | avdmanager create avd --force -n "$AVD_NAME" -k "$IMAGE" >/dev/null
+
+# GitHub hosted Linux runners normally expose KVM. Fall back to software
+# acceleration rather than silently skipping runtime validation.
+ACCEL="-accel off"
+if [[ -e /dev/kvm ]]; then
+  sudo chmod 666 /dev/kvm || true
+  ACCEL="-accel on"
+fi
+
+emulator -avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -no-metrics $ACCEL > /tmp/nt-emulator.log 2>&1 &
+EMU_PID=$!
+trap 'kill "$EMU_PID" 2>/dev/null || true' EXIT
+
+adb wait-for-device
+for _ in $(seq 1 180); do
+  [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]] && break
+  sleep 2
+done
+[[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]] || fail "emulator did not boot"
+adb shell input keyevent 82 || true
+adb shell wm dismiss-keyguard || true
+
+adb install -r "$APK" >/dev/null
+adb shell pm grant com.neurontap.app android.permission.READ_MEDIA_VIDEO || true
+adb shell pm grant com.neurontap.app android.permission.READ_MEDIA_IMAGES || true
+
+# Generate the exact kind of pathological duration that exposed the v0.7
+# player: a sub-second H.264 loop. Visual content is irrelevant to decoder/lifecycle stress.
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq ffmpeg
+fi
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=360x640:rate=30 -t 0.80 -c:v libx264 -pix_fmt yuv420p /tmp/nt-loop.mp4
+adb shell mkdir -p /sdcard/Movies
+adb push /tmp/nt-loop.mp4 /sdcard/Movies/nt_v8_loop.mp4 >/dev/null
+adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Movies/nt_v8_loop.mp4 >/dev/null
+sleep 2
+
+adb shell am force-stop com.neurontap.app
+adb shell am start -W -n com.neurontap.app/.MainActivity >/dev/null
+sleep 5
+assert_alive "cold start"
+
+# Exercise the exact cold-start tab path that previously queued multiple swipes.
+for desc in Videos Favorites Albums Gallery Videos; do
+  tap_desc "$desc" || fail "could not locate $desc tab"
+  sleep 0.25
+  assert_alive "tab navigation to $desc"
+done
+
+# Open the pathological short video by accessibility label.
+for _ in $(seq 1 20); do
+  if tap_desc "nt_v8_loop.mp4"; then break; fi
+  sleep 1
+done
+sleep 2
+assert_alive "opening short-loop video"
+
+# Let it cross its repeat boundary many times before touching anything.
+sleep 8
+assert_alive "repeated sub-second looping"
+
+# Hammer pause/play while the loop repeatedly crosses its end boundary.
+for i in $(seq 1 24); do
+  if tap_desc "Pause"; then :; elif tap_desc "Play"; then :; else fail "play/pause control disappeared at iteration $i"; fi
+  sleep 0.10
+  if tap_desc "Play"; then :; elif tap_desc "Pause"; then :; else fail "play/pause control disappeared after toggle $i"; fi
+  sleep 0.10
+  assert_alive "rapid pause/play iteration $i"
+done
+
+# Scrub both directions several times when Compose exposes Slider as SeekBar.
+# Fail if it never appears: timeline interaction is a release-blocking video path.
+seek_seen=0
+for i in $(seq 1 8); do
+  if swipe_seekbar forward; then seek_seen=1; fi
+  sleep 0.15
+  assert_alive "forward scrub $i"
+  if swipe_seekbar back; then seek_seen=1; fi
+  sleep 0.15
+  assert_alive "backward scrub $i"
+done
+[[ "$seek_seen" == "1" ]] || fail "video timeline SeekBar was not accessible"
+
+# Repeated orientation recreation was a direct v0.7 crash reproducer.
+adb shell settings put system accelerometer_rotation 0
+for i in $(seq 1 8); do
+  adb shell settings put system user_rotation 1
+  sleep 0.6
+  assert_alive "landscape rotation $i"
+  adb shell settings put system user_rotation 0
+  sleep 0.6
+  assert_alive "portrait rotation $i"
+  if tap_desc "Pause"; then tap_desc "Play" || true; elif tap_desc "Play"; then tap_desc "Pause" || true; fi
+  assert_alive "post-rotation playback $i"
+done
+
+# Background/reopen must not poison the player or cold-start media state.
+adb shell input keyevent 3
+sleep 2
+assert_alive "backgrounding"
+adb shell am start -W -n com.neurontap.app/.MainActivity >/dev/null
+sleep 2
+assert_alive "foreground return"
+
+echo "NeuronTap v0.8 emulator smoke test passed."
