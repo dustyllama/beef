@@ -91,6 +91,9 @@ jobs:
       - name: Apply v0.8 security defaults
         run: python3 tools/apply_v8_security.py
 
+      - name: Apply v0.8 compile fixes
+        run: python3 tools/fix_v8_compile1.py
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
