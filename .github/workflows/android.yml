@@ -2,7 +2,7 @@ name: Android Debug APK
 
 on:
   push:
-    branches: [ master, main, neurontap-build, aves-v2, horny-archives-v3, neurontap-v4, neurontap-v5-rc1, neurontap-v6 ]
+    branches: [ master, main, neurontap-build, aves-v2, horny-archives-v3, neurontap-v4, neurontap-v5-rc1, neurontap-v6, neurontap-v7 ]
   workflow_dispatch:
 
 jobs:
@@ -46,11 +46,32 @@ jobs:
       - name: Fix v0.6 gesture animation state
         run: python3 tools/fix_v6_anim.py
 
+      - name: Apply v0.7 core and migration
+        run: python3 tools/apply_v7_core.py
+
+      - name: Apply v0.7 nested Collections
+        run: python3 tools/apply_v7_organizer.py
+
+      - name: Apply v0.7 viewer foundation
+        run: python3 tools/apply_v7_viewer_base.py
+
+      - name: Apply v0.7 configurable controls
+        run: python3 tools/apply_v7_controls.py
+
+      - name: Apply v0.7 video rewrite
+        run: python3 tools/apply_v7_video.py
+
+      - name: Apply v0.7 gallery rewrite
+        run: python3 tools/apply_v7_gallery.py
+
+      - name: Apply v0.7 archive analytics
+        run: python3 tools/apply_v7_analytics.py
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: neurontap-v0.6-apk
+          name: neurontap-v0.7-apk
           path: app/build/outputs/apk/debug/app-debug.apk
