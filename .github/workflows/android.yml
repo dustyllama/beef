@@ -43,6 +43,9 @@ jobs:
       - name: Apply v0.6 viewer patch
         run: python3 tools/apply_v6_viewer.py
 
+      - name: Fix v0.6 gesture animation state
+        run: python3 tools/fix_v6_anim.py
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
