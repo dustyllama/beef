@@ -2,7 +2,7 @@ name: Android Debug APK
 
 on:
   push:
-    branches: [ master, main, neurontap-build, aves-v2, horny-archives-v3, neurontap-v4, neurontap-v5-rc1, neurontap-v6, neurontap-v7 ]
+    branches: [ master, main, neurontap-build, aves-v2, horny-archives-v3, neurontap-v4, neurontap-v5-rc1, neurontap-v6, neurontap-v7, neurontap-v8 ]
   workflow_dispatch:
 
 jobs:
@@ -70,11 +70,29 @@ jobs:
       - name: Apply v0.7 compile fixes
         run: python3 tools/fix_v7_compile1.py
 
+      - name: Apply v0.8 performance pipeline
+        run: python3 tools/apply_v8_performance.py
+
+      - name: Apply v0.8 control semantics
+        run: python3 tools/apply_v8_controls.py
+
+      - name: Apply v0.8 gallery and navigation fixes
+        run: python3 tools/apply_v8_gallery.py
+
+      - name: Integrate v0.8 single-player video host
+        run: python3 tools/apply_v8_video_integration.py
+
+      - name: Apply v0.8 activity storm and Tag Lab repairs
+        run: python3 tools/apply_v8_analytics.py
+
+      - name: Apply v0.8 security defaults
+        run: python3 tools/apply_v8_security.py
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: neurontap-v0.7-apk
+          name: neurontap-v0.8-apk
           path: app/build/outputs/apk/debug/app-debug.apk
