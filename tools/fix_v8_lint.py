@@ -3,21 +3,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "app/src/main/java/com/neurontap/app"
 
-# Media3 intentionally marks a number of APIs used by the custom viewer/player
-# as unstable. We opt in at file scope only for files that actually reference
-# Media3, instead of suppressing Android lint globally or creating a baseline.
-changed = []
+# Media3's UnstableApi is an AndroidX experimental marker, not Kotlin's
+# RequiresOptIn marker. Using kotlin.OptIn compiles but lint correctly rejects
+# it. Opt the app package in with androidx.annotation.OptIn, exactly as Media3
+# documents, so every custom viewer/player usage is covered without disabling
+# UnsafeOptInUsageError or hiding unrelated lint findings.
+wrong = "@file:OptIn(androidx.media3.common.util.UnstableApi::class)\n\n"
 for p in SRC.glob("*.kt"):
-    s = p.read_text()
-    if "androidx.media3." not in s and "SeekParameters" not in s:
+    if p.name == "package-info.kt":
         continue
-    marker = "@file:OptIn(androidx.media3.common.util.UnstableApi::class)"
-    if marker not in s:
-        s = marker + "\n\n" + s
-        p.write_text(s)
-        changed.append(p.name)
+    s = p.read_text()
+    if s.startswith(wrong):
+        p.write_text(s[len(wrong):])
 
-if not changed:
-    print("v8 lint opt-ins already present or no Media3 files found")
-else:
-    print("Applied v8 Media3 lint opt-ins to: " + ", ".join(changed))
+package_info = SRC / "package-info.kt"
+package_info.write_text('''@OptIn(UnstableApi::class)\npackage com.neurontap.app\n\nimport androidx.annotation.OptIn\nimport androidx.media3.common.util.UnstableApi\n''')
+
+print("Applied AndroidX Media3 package opt-in for v8 lint")
