@@ -73,6 +73,9 @@ jobs:
       - name: Apply v0.8 performance pipeline
         run: python3 tools/apply_v8_performance.py
 
+      - name: Repair v0.8 control patch anchor
+        run: python3 tools/fix_v8_controls_anchor.py
+
       - name: Apply v0.8 control semantics
         run: python3 tools/apply_v8_controls.py
 
