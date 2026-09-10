@@ -4,6 +4,7 @@ set -euo pipefail
 APK="${1:-app/build/outputs/apk/debug/app-debug.apk}"
 AVD_NAME="neurontap_v8_smoke"
 IMAGE="system-images;android-35;google_apis;x86_64"
+IMAGE_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}/system-images/android-35/google_apis/x86_64"
 
 fail() { echo "SMOKE FAILURE: $*" >&2; exit 1; }
 app_alive() { adb shell pidof com.neurontap.app 2>/dev/null | grep -q '[0-9]'; }
@@ -71,7 +72,11 @@ PY
 }
 
 echo "Installing emulator image..."
-yes | sdkmanager "$IMAGE" >/dev/null
+# setup-android has already accepted licenses. Do not pipe infinite `yes` into
+# sdkmanager under `pipefail`: sdkmanager can succeed, close stdin, and make
+# `yes` die with SIGPIPE, falsely failing the release gate.
+sdkmanager --install "$IMAGE" >/dev/null
+[[ -d "$IMAGE_DIR" ]] || fail "emulator image was not installed at $IMAGE_DIR"
 printf 'no\n' | avdmanager create avd --force -n "$AVD_NAME" -k "$IMAGE" >/dev/null
 
 # GitHub hosted Linux runners normally expose KVM. Fall back to software
@@ -124,10 +129,12 @@ for desc in Videos Favorites Albums Gallery Videos; do
 done
 
 # Open the pathological short video by accessibility label.
+opened=0
 for _ in $(seq 1 20); do
-  if tap_desc "nt_v8_loop.mp4"; then break; fi
+  if tap_desc "nt_v8_loop.mp4"; then opened=1; break; fi
   sleep 1
 done
+[[ "$opened" == "1" ]] || fail "could not locate pathological short-loop video"
 sleep 2
 assert_alive "opening short-loop video"
 
