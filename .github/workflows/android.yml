@@ -32,6 +32,11 @@ jobs:
       - name: Apply v0.5 field-test patch
         run: python3 tools/apply_v5_feedback.py
 
+      - name: Normalize version input
+        run: |
+          sed -i 's/versionCode = 5/versionCode = 4/' app/build.gradle.kts
+          sed -i 's/versionName = "0.5.0"/versionName = "0.4.0"/' app/build.gradle.kts
+
       - name: Apply v0.6 core patch
         run: python3 tools/apply_v6_core.py
 
