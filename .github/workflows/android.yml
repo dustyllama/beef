@@ -67,6 +67,9 @@ jobs:
       - name: Apply v0.7 archive analytics
         run: python3 tools/apply_v7_analytics.py
 
+      - name: Apply v0.7 compile fixes
+        run: python3 tools/fix_v7_compile1.py
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
