@@ -97,5 +97,41 @@ if old_tabs not in s:
     raise SystemExit("tab navigation anchor not found")
 s = s.replace(old_tabs, new_tabs, 1)
 
+# Compose NavigationBarItem does not reliably expose selected=true through
+# UIAutomator. Verify the Videos context by its actual media content instead.
+old_contains = '''assert_ui_contains() {
+  local needle="$1"
+  dump_ui
+  grep -Fq "$needle" /tmp/nt-window.xml || fail "UI did not contain expected text: $needle"
+}
+'''
+new_contains = '''assert_ui_contains() {
+  local needle="$1"
+  dump_ui
+  grep -Fq "$needle" /tmp/nt-window.xml || fail "UI did not contain expected text: $needle"
+}
+
+wait_ui_contains() {
+  local needle="$1"
+  local attempts="${2:-20}"
+  for _ in $(seq 1 "$attempts"); do
+    dump_ui
+    if grep -Fq "$needle" /tmp/nt-window.xml; then
+      return 0
+    fi
+    sleep 1
+  done
+  fail "UI did not contain expected text after waiting: $needle"
+}
+'''
+if old_contains not in s:
+    raise SystemExit("UI assertion anchor not found")
+s = s.replace(old_contains, new_contains, 1)
+
+selected_check = 'assert_selected_tab "Videos"'
+if s.count(selected_check) != 2:
+    raise SystemExit(f"expected two Videos selected checks, found {s.count(selected_check)}")
+s = s.replace(selected_check, 'wait_ui_contains "nt_v8_loop.mp4"')
+
 p.write_text(s)
-print("Hardened v0.8.1 emulator boot detection, pinned AVD home, and fixed tab locator")
+print("Hardened v0.8.1 emulator boot detection and switched Videos-context verification to visible media")
