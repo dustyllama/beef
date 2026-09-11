@@ -80,6 +80,26 @@ tap_desc_retry() {
   return 1
 }
 
+# MEDIA_SCANNER_SCAN_FILE is asynchronous. A fixed sleep made the release gate
+# race Android's MediaStore and fail with an empty Videos tab even though the app
+# itself was healthy. Do not launch NeuronTap until the injected QA video is
+# queryable through the same provider the app indexes.
+wait_for_scanned_video() {
+  local videos
+  for _ in $(seq 1 30); do
+    videos="$(adb shell content query --uri content://media/external/video/media 2>/dev/null || true)"
+    if grep -Fq 'nt_v8_loop.mp4' <<<"$videos"; then
+      echo "Android MediaStore sees nt_v8_loop.mp4"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "----- MediaStore videos -----" >&2
+  adb shell content query --uri content://media/external/video/media >&2 || true
+  echo "-----------------------------" >&2
+  fail "Android MediaStore never exposed pathological short-loop video"
+}
+
 swipe_seekbar() {
   local direction="$1"
   adb shell uiautomator dump /sdcard/nt-window.xml >/dev/null 2>&1 || true
@@ -191,7 +211,7 @@ ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=360x640:rate=30
 adb shell mkdir -p /sdcard/Movies
 adb push /tmp/nt-loop.mp4 /sdcard/Movies/nt_v8_loop.mp4 >/dev/null
 adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Movies/nt_v8_loop.mp4 >/dev/null
-sleep 2
+wait_for_scanned_video
 
 adb shell am force-stop com.neurontap.app
 adb shell am start -W -n com.neurontap.app/.MainActivity >/dev/null
