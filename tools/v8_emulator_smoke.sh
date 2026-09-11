@@ -4,7 +4,9 @@ set -euo pipefail
 APK="${1:-app/build/outputs/apk/debug/app-debug.apk}"
 AVD_NAME="neurontap_v8_smoke"
 IMAGE="system-images;android-35;google_apis;x86_64"
-IMAGE_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}/system-images/android-35/google_apis/x86_64"
+SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
+IMAGE_DIR="$SDK_ROOT/system-images/android-35/google_apis/x86_64"
+EMULATOR_BIN="$SDK_ROOT/emulator/emulator"
 
 fail() { echo "SMOKE FAILURE: $*" >&2; exit 1; }
 app_alive() { adb shell pidof com.neurontap.app 2>/dev/null | grep -q '[0-9]'; }
@@ -83,6 +85,7 @@ echo "Installing emulator image..."
 sdkmanager --install "$IMAGE" >/dev/null
 [[ -d "$IMAGE_DIR" ]] || fail "emulator image was not installed at $IMAGE_DIR"
 printf 'no\n' | avdmanager create avd --force -n "$AVD_NAME" -k "$IMAGE" >/dev/null
+[[ -x "$EMULATOR_BIN" ]] || fail "Android emulator binary not found at $EMULATOR_BIN"
 
 # GitHub hosted Linux runners normally expose KVM. Fall back to software
 # acceleration rather than silently skipping runtime validation.
@@ -92,7 +95,7 @@ if [[ -e /dev/kvm ]]; then
   ACCEL="-accel on"
 fi
 
-emulator -avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -no-snapshot -no-snapshot-save -wipe-data -gpu swiftshader_indirect -no-metrics $ACCEL > /tmp/nt-emulator.log 2>&1 &
+"$EMULATOR_BIN" -avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -no-snapshot -no-snapshot-save -wipe-data -gpu swiftshader_indirect -no-metrics $ACCEL > /tmp/nt-emulator.log 2>&1 &
 EMU_PID=$!
 trap 'kill "$EMU_PID" 2>/dev/null || true' EXIT
 
