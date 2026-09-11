@@ -20,9 +20,11 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -91,9 +93,11 @@ fun MediaThumbnail(
     }
 
     val cacheKey = remember(item.id, item.modified, item.uri) { VideoThumbCache.key(item) }
-    val state by produceState<VideoThumbState>(VideoThumbState.Loading, cacheKey) {
+    var state by remember(cacheKey) { mutableStateOf<VideoThumbState>(VideoThumbState.Loading) }
+    LaunchedEffect(cacheKey) {
+        state = VideoThumbState.Loading
         val bitmap = VideoThumbCache.loadMediaStore(context, item)
-        value = if (bitmap != null) VideoThumbState.Ready(bitmap) else VideoThumbState.Fallback
+        state = if (bitmap != null) VideoThumbState.Ready(bitmap) else VideoThumbState.Fallback
     }
 
     when (val current = state) {
