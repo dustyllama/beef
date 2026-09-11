@@ -104,6 +104,9 @@ jobs:
       - name: Apply v0.8.1 catastrophic repair
         run: python3 tools/apply_v8_repair.py
 
+      - name: Apply v0.8.1 video thumbnail repair
+        run: python3 tools/apply_v8_thumbnail_repair.py
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
