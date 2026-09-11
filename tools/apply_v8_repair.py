@@ -122,4 +122,50 @@ if old_clock not in s:
 s = s.replace(old_clock, new_clock, 1)
 p.write_text(s)
 
-print("Applied v0.8.1 catastrophic video/navigation repair")
+# The draggable Neuron reaction button must never sit on top of the video
+# timeline. The field recording and behavioral QA showed timeline swipes moving
+# the reaction button instead of seeking. Keep its normal 112dp bottom margin,
+# but reserve a deeper strip while video controls are visible. Apply the same
+# bound to saved positions, resizing, and dragging so existing installs recover.
+p = ROOT / "app/src/main/java/com/neurontap/app/ViewerUi.kt"
+s = p.read_text()
+old_default = '''        if (reactionXPx.isNaN()) reactionXPx = ((maxW - reactionSizePx) / 2f).coerceAtLeast(0f)
+        if (reactionYPx.isNaN()) reactionYPx = (maxH - reactionSizePx - with(density) { 112.dp.toPx() }).coerceAtLeast(0f)
+
+        LaunchedEffect(maxW, maxH, reactionSizePx) {
+            reactionXPx = reactionXPx.coerceIn(0f, (maxW - reactionSizePx).coerceAtLeast(0f))
+            reactionYPx = reactionYPx.coerceIn(0f, (maxH - reactionSizePx).coerceAtLeast(0f))
+        }
+'''
+new_default = '''        val reactionBottomClearancePx = with(density) {
+            (if (current.isVideo && controlsVisible) 184.dp else 112.dp).toPx()
+        }
+        fun reactionMaxY(sizePx: Float = reactionSizePx): Float =
+            (maxH - sizePx - reactionBottomClearancePx).coerceAtLeast(0f)
+
+        if (reactionXPx.isNaN()) reactionXPx = ((maxW - reactionSizePx) / 2f).coerceAtLeast(0f)
+        if (reactionYPx.isNaN()) reactionYPx = reactionMaxY()
+
+        LaunchedEffect(maxW, maxH, reactionSizePx, reactionBottomClearancePx) {
+            reactionXPx = reactionXPx.coerceIn(0f, (maxW - reactionSizePx).coerceAtLeast(0f))
+            reactionYPx = reactionYPx.coerceIn(0f, reactionMaxY())
+        }
+'''
+if old_default not in s:
+    raise RuntimeError("v8 repair reaction default/clamp anchor missing")
+s = s.replace(old_default, new_default, 1)
+
+old_resize_y = '                            reactionYPx = (centerY - nextSize / 2f).coerceIn(0f, (maxH - nextSize).coerceAtLeast(0f))\n'
+new_resize_y = '                            reactionYPx = (centerY - nextSize / 2f).coerceIn(0f, reactionMaxY(nextSize))\n'
+if old_resize_y not in s:
+    raise RuntimeError("v8 repair reaction resize clamp anchor missing")
+s = s.replace(old_resize_y, new_resize_y, 1)
+
+old_drag_y = '                            reactionYPx = (reactionYPx + delta.y).coerceIn(0f, (maxH - reactionSizePx).coerceAtLeast(0f))\n'
+new_drag_y = '                            reactionYPx = (reactionYPx + delta.y).coerceIn(0f, reactionMaxY())\n'
+if old_drag_y not in s:
+    raise RuntimeError("v8 repair reaction drag clamp anchor missing")
+s = s.replace(old_drag_y, new_drag_y, 1)
+p.write_text(s)
+
+print("Applied v0.8.3 video/navigation/reaction-control repair")
