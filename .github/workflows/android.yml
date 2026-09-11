@@ -116,6 +116,9 @@ jobs:
       - name: Harden v0.8.1 MediaStore smoke
         run: python3 tools/harden_v8_smoke_v2.py
 
+      - name: Fix v0.8.1 smoke screenshot parsing
+        run: python3 tools/fix_v8_smoke_ffprobe.py
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
