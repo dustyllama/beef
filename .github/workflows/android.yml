@@ -120,7 +120,7 @@ jobs:
 
       - name: Emulator torture smoke test
         timeout-minutes: 45
-        run: bash tools/v8_emulator_smoke.sh app/build/outputs/apk/debug/app-debug.apk
+        run: bash -x tools/v8_emulator_smoke.sh app/build/outputs/apk/debug/app-debug.apk
 
       # Do not publish a candidate merely because it compiled. The artifact is
       # exposed only after lint, package/signature verification and runtime abuse.
