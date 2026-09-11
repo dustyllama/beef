@@ -7,6 +7,7 @@ IMAGE="system-images;android-35;google_apis;x86_64"
 SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
 IMAGE_DIR="$SDK_ROOT/system-images/android-35/google_apis/x86_64"
 EMULATOR_BIN="$SDK_ROOT/emulator/emulator"
+export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
 
 fail() { echo "SMOKE FAILURE: $*" >&2; exit 1; }
 app_alive() { adb shell pidof com.neurontap.app 2>/dev/null | grep -q '[0-9]'; }
@@ -84,7 +85,9 @@ echo "Installing emulator image..."
 # `yes` die with SIGPIPE, falsely failing the release gate.
 sdkmanager --install "$IMAGE" >/dev/null
 [[ -d "$IMAGE_DIR" ]] || fail "emulator image was not installed at $IMAGE_DIR"
+mkdir -p "$ANDROID_AVD_HOME"
 printf 'no\n' | avdmanager create avd --force -n "$AVD_NAME" -k "$IMAGE" >/dev/null
+[[ -f "$ANDROID_AVD_HOME/$AVD_NAME.ini" ]] || fail "AVD definition was not created at $ANDROID_AVD_HOME/$AVD_NAME.ini"
 [[ -x "$EMULATOR_BIN" ]] || fail "Android emulator binary not found at $EMULATOR_BIN"
 
 # GitHub hosted Linux runners normally expose KVM. Fall back to software
