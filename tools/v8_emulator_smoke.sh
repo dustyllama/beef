@@ -9,6 +9,11 @@ IMAGE_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}/system-images
 fail() { echo "SMOKE FAILURE: $*" >&2; exit 1; }
 app_alive() { adb shell pidof com.neurontap.app 2>/dev/null | grep -q '[0-9]'; }
 assert_alive() { app_alive || fail "NeuronTap process died during $1"; }
+dump_emulator_log() {
+  echo "----- emulator log -----" >&2
+  tail -n 200 /tmp/nt-emulator.log >&2 2>/dev/null || true
+  echo "------------------------" >&2
+}
 
 # Accessibility-first tap helper. Keeps the test independent of a particular
 # emulator resolution and catches basic Compose navigation regressions.
@@ -87,16 +92,45 @@ if [[ -e /dev/kvm ]]; then
   ACCEL="-accel on"
 fi
 
-emulator -avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -no-metrics $ACCEL > /tmp/nt-emulator.log 2>&1 &
+emulator -avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -no-snapshot -no-snapshot-save -wipe-data -gpu swiftshader_indirect -no-metrics $ACCEL > /tmp/nt-emulator.log 2>&1 &
 EMU_PID=$!
 trap 'kill "$EMU_PID" 2>/dev/null || true' EXIT
 
-adb wait-for-device
-for _ in $(seq 1 180); do
-  [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]] && break
-  sleep 2
+# Never allow adb wait-for-device to consume the entire CI timeout. If the
+# emulator crashes before registering with adb, surface its log immediately.
+DEVICE_READY=0
+for _ in $(seq 1 120); do
+  if ! kill -0 "$EMU_PID" 2>/dev/null; then
+    dump_emulator_log
+    fail "emulator process exited before registering with adb"
+  fi
+  if adb devices | awk '$1 ~ /^emulator-/ && $2 == "device" { found=1 } END { exit(found ? 0 : 1) }'; then
+    DEVICE_READY=1
+    break
+  fi
+  sleep 1
 done
-[[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]] || fail "emulator did not boot"
+if [[ "$DEVICE_READY" != "1" ]]; then
+  dump_emulator_log
+  fail "emulator did not register with adb within 120 seconds"
+fi
+
+BOOT_READY=0
+for _ in $(seq 1 180); do
+  if ! kill -0 "$EMU_PID" 2>/dev/null; then
+    dump_emulator_log
+    fail "emulator process exited before Android finished booting"
+  fi
+  if [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; then
+    BOOT_READY=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$BOOT_READY" != "1" ]]; then
+  dump_emulator_log
+  fail "emulator did not finish booting within 180 seconds"
+fi
 adb shell input keyevent 82 || true
 adb shell wm dismiss-keyguard || true
 
