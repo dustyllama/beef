@@ -2,7 +2,36 @@ from pathlib import Path
 
 p = Path(__file__).resolve().parent / "v8_emulator_smoke.sh"
 s = p.read_text()
-old = '''emulator -avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -no-metrics $ACCEL > /tmp/nt-emulator.log 2>&1 &
+
+old_create = '''printf 'no\\n' | avdmanager create avd --force -n "$AVD_NAME" -k "$IMAGE"
+
+ACCEL="-accel off"
+'''
+new_create = '''# Keep avdmanager and the current emulator on the exact same AVD directory.
+# New Android emulator builds no longer reliably discover AVDs created by older
+# command-line tools through their legacy SDK-home fallback.
+export ANDROID_AVD_HOME="${RUNNER_TEMP:-/tmp}/neurontap-avd"
+mkdir -p "$ANDROID_AVD_HOME"
+rm -rf "$ANDROID_AVD_HOME/$AVD_NAME.avd" "$ANDROID_AVD_HOME/$AVD_NAME.ini"
+printf 'no\\n' | avdmanager create avd --force -n "$AVD_NAME" -k "$IMAGE"
+
+EMULATOR_BIN="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}/emulator/emulator"
+[[ -x "$EMULATOR_BIN" ]] || fail "Android emulator binary missing at $EMULATOR_BIN"
+if ! "$EMULATOR_BIN" -list-avds | grep -Fxq "$AVD_NAME"; then
+  echo "---- AVD directory ----" >&2
+  find "$ANDROID_AVD_HOME" -maxdepth 2 -type f -print >&2 || true
+  echo "---- avdmanager list ----" >&2
+  avdmanager list avd >&2 || true
+  fail "created AVD is not visible to emulator"
+fi
+
+ACCEL="-accel off"
+'''
+if old_create not in s:
+    raise SystemExit("AVD creation anchor not found")
+s = s.replace(old_create, new_create, 1)
+
+old_boot = '''emulator -avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -no-metrics $ACCEL > /tmp/nt-emulator.log 2>&1 &
 EMU_PID=$!
 trap 'kill "$EMU_PID" 2>/dev/null || true' EXIT
 
@@ -13,9 +42,7 @@ for _ in $(seq 1 180); do
 done
 [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\\r')" == "1" ]] || fail "emulator did not boot"
 '''
-new = '''EMULATOR_BIN="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}/emulator/emulator"
-[[ -x "$EMULATOR_BIN" ]] || fail "Android emulator binary missing at $EMULATOR_BIN"
-"$EMULATOR_BIN" -avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader -no-metrics $ACCEL > /tmp/nt-emulator.log 2>&1 &
+new_boot = '''"$EMULATOR_BIN" -avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader -no-metrics $ACCEL > /tmp/nt-emulator.log 2>&1 &
 EMU_PID=$!
 trap 'kill "$EMU_PID" 2>/dev/null || true' EXIT
 
@@ -60,7 +87,9 @@ if [[ "$BOOT_READY" != "1" ]]; then
   fail "emulator did not complete Android boot"
 fi
 '''
-if old not in s:
+if old_boot not in s:
     raise SystemExit("emulator boot block anchor not found")
-p.write_text(s.replace(old, new, 1))
-print("Hardened v0.8.1 emulator boot detection")
+s = s.replace(old_boot, new_boot, 1)
+
+p.write_text(s)
+print("Hardened v0.8.1 emulator boot detection and pinned AVD home")
