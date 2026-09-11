@@ -75,6 +75,12 @@ for anchor, replacement in [
             raise RuntimeError(f"v8 indexing repair import anchor missing: {anchor!r}")
         s = s.replace(anchor, replacement, 1)
 
+if "import android.provider.MediaStore\n" not in s:
+    anchor = "import android.os.Looper\n"
+    if anchor not in s:
+        raise RuntimeError("v8 indexing repair MediaStore import anchor missing")
+    s = s.replace(anchor, anchor + "import android.provider.MediaStore\n", 1)
+
 # fix_v8_scroll_churn normally adds delay before this repair. Keep this patch
 # independently safe if the workflow order changes later.
 if "import kotlinx.coroutines.delay\n" not in s:
@@ -89,15 +95,13 @@ if state_anchor not in s:
 if "mediaChangeGeneration" not in s:
     s = s.replace(state_anchor, state_anchor + '    var mediaChangeGeneration by remember { mutableIntStateOf(0) }\n', 1)
 
-old_scan = '''    suspend fun scanDevice() {
-        if (!hasAnyMediaPermission()) return
-        message = "Refreshing device library…"
-        val count = withContext(Dispatchers.IO) { MediaStoreIndexer.index(context, controller.db) }
-        prefs.edit().putLong("last_device_scan", System.currentTimeMillis()).apply()
-        reload()
-        message = "$count device media items indexed"
-    }
-'''
+# Replace the generated scanDevice function by boundaries rather than an exact
+# body. v7/v8 patches legitimately add bookkeeping to the neighboring reload
+# path, and an exact text anchor made the repair itself fail before compilation.
+scan_start = s.find("    suspend fun scanDevice(")
+scan_end = s.find("\n\n    suspend fun rescanEverything()", scan_start)
+if scan_start < 0 or scan_end < 0:
+    raise RuntimeError("v8 indexing repair scanDevice boundaries missing")
 new_scan = '''    suspend fun scanDevice(showStatus: Boolean = true) {
         if (!hasAnyMediaPermission()) return
         if (showStatus) message = "Refreshing device library…"
@@ -105,38 +109,30 @@ new_scan = '''    suspend fun scanDevice(showStatus: Boolean = true) {
         prefs.edit().putLong("last_device_scan", System.currentTimeMillis()).apply()
         reload()
         if (showStatus) message = "$count device media items indexed"
-    }
-'''
-if old_scan not in s:
-    raise RuntimeError("v8 indexing repair scanDevice anchor missing")
-s = s.replace(old_scan, new_scan, 1)
+    }'''
+s = s[:scan_start] + new_scan + s[scan_end:]
 
-old_permission = '''    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        if (result.values.any { it }) scope.launch { scanDevice() }
-        else message = "Device-library access was not granted. Linked folders still work."
-    }
-'''
-new_permission = '''    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        if (result.values.any { it }) scope.launch { scanDevice(showStatus = false) }
-        else message = "Device-library access was not granted. Linked folders still work."
-    }
-'''
-if old_permission not in s:
-    raise RuntimeError("v8 indexing repair permission callback anchor missing")
-s = s.replace(old_permission, new_permission, 1)
+# Keep whatever ActivityResult plumbing preceding patches produced, changing
+# only the successful permission path so initial indexing is quiet.
+permission_start = s.find("    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions())")
+permission_end = s.find("\n\n    val folderPicker", permission_start)
+if permission_start < 0 or permission_end < 0:
+    raise RuntimeError("v8 indexing repair permission callback boundaries missing")
+permission_block = s[permission_start:permission_end]
+if "scanDevice(showStatus = false)" not in permission_block:
+    if "scanDevice()" not in permission_block:
+        raise RuntimeError("v8 indexing repair permission scan call missing")
+    permission_block = permission_block.replace("scanDevice()", "scanDevice(showStatus = false)", 1)
+s = s[:permission_start] + permission_block + s[permission_end:]
 
-old_startup = '''    LaunchedEffect(Unit) {
-        controller.log(null, EventTypes.GALLERY_OPEN)
-        prefs.edit().putStringSet("linked_roots", linkedRoots).apply()
-        reload()
-        if (!hasAnyMediaPermission()) permissionLauncher.launch(mediaPermissions)
-        else if (System.currentTimeMillis() - prefs.getLong("last_device_scan", 0L) > 10 * 60 * 1000L) scanDevice()
-    }
-'''
-new_startup = '''    // A gallery must reflect MediaStore at every cold start. The old ten-minute
-    // throttle could permanently preserve an empty/stale database when Android's
-    // media scanner finished just after NeuronTap's first query.
-    LaunchedEffect(Unit) {
+# Replace startup by semantic boundaries. A gallery must reflect MediaStore at
+# every cold start: the old ten-minute throttle could preserve an empty DB when
+# Android's scanner finalized rows just after NeuronTap's first query.
+startup_start = s.find("    LaunchedEffect(Unit) {\n        controller.log(null, EventTypes.GALLERY_OPEN)")
+startup_end = s.find("\n\n    LaunchedEffect(mode,", startup_start)
+if startup_start < 0 or startup_end < 0:
+    raise RuntimeError("v8 indexing repair startup boundaries missing")
+new_startup = '''    LaunchedEffect(Unit) {
         controller.log(null, EventTypes.GALLERY_OPEN)
         prefs.edit().putStringSet("linked_roots", linkedRoots).apply()
         reload()
@@ -145,9 +141,9 @@ new_startup = '''    // A gallery must reflect MediaStore at every cold start. T
     }
 
     // MediaStore is a live source, not a one-shot import. Observe both provider
-    // collections and debounce scanner bursts; the generation-keyed effect is
-    // cancelled/restarted when more changes arrive, so only the settled state is
-    // indexed. This also repairs the launch-while-scanner-is-pending race.
+    // collections and debounce scanner bursts. The generation-keyed effect is
+    // cancelled/restarted when more changes arrive, so only settled state is
+    // indexed. This also closes the launch-while-scanner-is-pending race.
     DisposableEffect(hasAnyMediaPermission()) {
         if (!hasAnyMediaPermission()) {
             onDispose { }
@@ -167,19 +163,8 @@ new_startup = '''    // A gallery must reflect MediaStore at every cold start. T
         if (mediaChangeGeneration == 0 || !hasAnyMediaPermission()) return@LaunchedEffect
         delay(500L)
         scanDevice(showStatus = false)
-    }
-'''
-if old_startup not in s:
-    raise RuntimeError("v8 indexing repair startup anchor missing")
-s = s.replace(old_startup, new_startup, 1)
-
-# MediaStore is needed by the observer. GalleryUi previously dealt with it only
-# indirectly through MediaStoreIndexer.
-if "import android.provider.MediaStore\n" not in s:
-    anchor = "import android.os.Looper\n"
-    if anchor not in s:
-        raise RuntimeError("v8 indexing repair MediaStore import anchor missing")
-    s = s.replace(anchor, anchor + "import android.provider.MediaStore\n", 1)
+    }'''
+s = s[:startup_start] + new_startup + s[startup_end:]
 
 p.write_text(s)
 print("Applied v0.8.1 live MediaStore indexing repair")
