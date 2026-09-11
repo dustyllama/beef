@@ -98,6 +98,9 @@ jobs:
       - name: Reduce v0.8 scroll persistence churn
         run: python3 tools/fix_v8_scroll_churn.py
 
+      - name: Repair v0.8 live MediaStore indexing
+        run: python3 tools/apply_v8_indexing_repair.py
+
       - name: Apply v0.8 targeted lint opt-ins
         run: python3 tools/fix_v8_lint.py
 
