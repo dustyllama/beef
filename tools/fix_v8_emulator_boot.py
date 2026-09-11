@@ -89,5 +89,13 @@ if old_boot not in s:
     raise SystemExit("emulator boot block anchor not found")
 s = s.replace(old_boot, new_boot, 1)
 
+# The first gallery tab is icon-only and currently exposes the accessibility
+# label "All". Keep the smoke test aligned with the actual Compose semantics.
+old_tabs = 'for desc in Videos Favorites Albums Gallery Videos; do'
+new_tabs = 'for desc in Videos Favorites Albums All Videos; do'
+if old_tabs not in s:
+    raise SystemExit("tab navigation anchor not found")
+s = s.replace(old_tabs, new_tabs, 1)
+
 p.write_text(s)
-print("Hardened v0.8.1 emulator boot detection and pinned AVD home")
+print("Hardened v0.8.1 emulator boot detection, pinned AVD home, and fixed tab locator")
