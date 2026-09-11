@@ -2,10 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# ---------------------------------------------------------------------------
-# Installability: v0.8 shipped as versionCode 8 and the rescue rollback is 9.
-# Every repaired candidate must therefore be >9 or Android will reject it.
-# ---------------------------------------------------------------------------
+# Installability: v0.8 shipped as versionCode 8 and rescue rollback is 9.
 p = ROOT / "app/build.gradle.kts"
 s = p.read_text()
 if "versionCode = 8" not in s or 'versionName = "0.8.0"' not in s:
@@ -14,11 +11,7 @@ s = s.replace("versionCode = 8", "versionCode = 10", 1)
 s = s.replace('versionName = "0.8.0"', 'versionName = "0.8.1-repair"', 1)
 p.write_text(s)
 
-# ---------------------------------------------------------------------------
-# Rotation: do not destroy/recreate the entire viewer/player just because the
-# device rotates. Compose receives the configuration change and lays out again
-# while the single ViewerVideoHost keeps the same player, position and media.
-# ---------------------------------------------------------------------------
+# Rotation must not destroy/recreate the entire viewer/player.
 p = ROOT / "app/src/main/AndroidManifest.xml"
 s = p.read_text()
 activity_anchor = 'android:name=".MainActivity"\n            android:exported="true"'
@@ -31,10 +24,7 @@ s = s.replace(
 )
 p.write_text(s)
 
-# ---------------------------------------------------------------------------
-# Gallery navigation state: tab/sort/nested location survive any Activity
-# recreation that still occurs for reasons other than ordinary rotation.
-# ---------------------------------------------------------------------------
+# Preserve Gallery tab/sort/nested location through any remaining recreation.
 p = ROOT / "app/src/main/java/com/neurontap/app/GalleryUi.kt"
 s = p.read_text()
 if "import androidx.compose.runtime.saveable.rememberSaveable\n" not in s:
@@ -54,11 +44,7 @@ for old, new in [
     s = s.replace(old, new, 1)
 p.write_text(s)
 
-# ---------------------------------------------------------------------------
-# Video viewer: preserve native aspect ratio, make short-video timing readable,
-# and use exact frame seeks during deliberate scrubbing instead of repeatedly
-# snapping to the same keyframe.
-# ---------------------------------------------------------------------------
+# Video: native aspect ratio, honest short-video timing, exact scrubbing seeks.
 p = ROOT / "app/src/main/java/com/neurontap/app/ViewerVideoV8.kt"
 s = p.read_text()
 if "import androidx.compose.foundation.layout.aspectRatio\n" not in s:
@@ -87,9 +73,8 @@ old_fit = '''            val containerAspect = if (maxHeight.value > 0f) maxWidt
 '''
 new_fit = '''            val safeAspect = aspect.coerceIn(0.1f, 10f)
             val containerAspect = if (maxHeight.value > 0f) maxWidth.value / maxHeight.value else safeAspect
-            // TextureView stretches its surface to its own bounds. The view itself
-            // therefore MUST have the video's native aspect ratio. Filling only one
-            // dimension without aspectRatio() was the cause of the grotesque stretch.
+            // TextureView stretches to its own bounds, so the view itself must
+            // carry the video's aspect ratio. Otherwise landscape gets mangled.
             val fitModifier = if (safeAspect >= containerAspect) {
                 Modifier.fillMaxWidth().aspectRatio(safeAspect)
             } else {
@@ -135,40 +120,6 @@ new_clock = '''private fun formatClockV8(ms: Long): String {
 if old_clock not in s:
     raise RuntimeError("v8 repair clock anchor missing")
 s = s.replace(old_clock, new_clock, 1)
-p.write_text(s)
-
-# ---------------------------------------------------------------------------
-# Thumbnail requests: bound decode size and give Coil stable cache identities.
-# Earlier version scripts also touch this function, so patch the model block by
-# structural boundaries instead of assuming one exact historical string.
-# ---------------------------------------------------------------------------
-p = ROOT / "app/src/main/java/com/neurontap/app/MediaThumbnail.kt"
-s = p.read_text()
-if "import androidx.compose.runtime.remember\n" not in s:
-    if "import androidx.compose.runtime.Composable\n" not in s:
-        raise RuntimeError("v8 repair thumbnail composable import missing")
-    s = s.replace("import androidx.compose.runtime.Composable\n", "import androidx.compose.runtime.Composable\nimport androidx.compose.runtime.remember\n", 1)
-start = s.find("    val model: Any = ")
-end = s.find("    AsyncImage(", start)
-if start < 0 or end < 0:
-    raise RuntimeError("v8 repair thumbnail model boundaries missing")
-new_model = '''    val model: Any = remember(item.id, item.uri, item.modified, item.isVideo) {
-        if (item.isVideo) {
-            val cacheKey = "video-thumb:${item.id}:${item.modified}"
-            ImageRequest.Builder(context)
-                .data(Uri.parse(item.uri))
-                .decoderFactory(VideoFrameDecoder.Factory())
-                .size(384)
-                .memoryCacheKey(cacheKey)
-                .diskCacheKey(cacheKey)
-                .crossfade(false)
-                .build()
-        } else {
-            Uri.parse(item.uri)
-        }
-    }
-'''
-s = s[:start] + new_model + s[end:]
 p.write_text(s)
 
 print("Applied v0.8.1 catastrophic video/navigation repair")
