@@ -119,6 +119,9 @@ jobs:
       - name: Fix v0.8.1 smoke screenshot parsing
         run: python3 tools/fix_v8_smoke_ffprobe.py
 
+      - name: Make aspect QA isolate actual video pixels
+        run: python3 tools/fix_v8_smoke_aspect_probe.py
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
@@ -136,6 +139,24 @@ jobs:
       - name: Emulator torture smoke test
         timeout-minutes: 20
         run: bash -x tools/v8_emulator_smoke_v2.sh app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Collect failed emulator QA evidence
+        if: failure()
+        run: |
+          mkdir -p qa-diagnostics
+          cp /tmp/nt-*.png qa-diagnostics/ 2>/dev/null || true
+          cp /tmp/nt-*.xml qa-diagnostics/ 2>/dev/null || true
+          cp /tmp/nt-emulator.log qa-diagnostics/ 2>/dev/null || true
+          cp /tmp/badging.txt qa-diagnostics/ 2>/dev/null || true
+          find qa-diagnostics -maxdepth 1 -type f -printf '%f\n' | sort || true
+
+      - name: Upload failed emulator QA evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: neurontap-v0.8.1-qa-failure-evidence
+          path: qa-diagnostics
+          if-no-files-found: warn
 
       # Do not publish a candidate merely because it compiled. The artifact is
       # exposed only after lint, package/signature verification and runtime abuse.
