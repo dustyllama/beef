@@ -10,12 +10,16 @@ fail() { echo "SMOKE FAILURE: $*" >&2; exit 1; }
 app_alive() { adb shell pidof com.neurontap.app 2>/dev/null | grep -q '[0-9]'; }
 assert_alive() { app_alive || fail "NeuronTap process died during $1"; }
 
+dump_ui() {
+  adb shell uiautomator dump /sdcard/nt-window.xml >/dev/null 2>&1 || true
+  adb exec-out cat /sdcard/nt-window.xml > /tmp/nt-window.xml 2>/dev/null || true
+}
+
 # Accessibility-first tap helper. Keeps the test independent of a particular
 # emulator resolution and catches basic Compose navigation regressions.
 tap_desc() {
   local needle="$1"
-  adb shell uiautomator dump /sdcard/nt-window.xml >/dev/null 2>&1 || true
-  adb exec-out cat /sdcard/nt-window.xml > /tmp/nt-window.xml 2>/dev/null || true
+  dump_ui
   local xy
   xy=$(python3 - "$needle" <<'PY'
 import re, sys, xml.etree.ElementTree as ET
@@ -40,10 +44,39 @@ PY
   adb shell input tap "$x" "$y"
 }
 
+assert_ui_contains() {
+  local needle="$1"
+  dump_ui
+  grep -Fq "$needle" /tmp/nt-window.xml || fail "UI did not contain expected text: $needle"
+}
+
+assert_selected_tab() {
+  local needle="$1"
+  dump_ui
+  python3 - "$needle" <<'PY' || exit 1
+import sys, xml.etree.ElementTree as ET
+needle=sys.argv[1].lower()
+root=ET.parse('/tmp/nt-window.xml').getroot()
+for n in root.iter('node'):
+    text=(n.attrib.get('text','')+' '+n.attrib.get('content-desc','')).lower()
+    if needle in text and n.attrib.get('selected','false') == 'true':
+        sys.exit(0)
+print(f'SMOKE FAILURE: {needle} tab was not selected', file=sys.stderr)
+sys.exit(1)
+PY
+}
+
+screen_center_tap() {
+  local size
+  size=$(adb shell wm size | tr -d '\r' | tail -1 | grep -oE '[0-9]+x[0-9]+' | tail -1)
+  local w=${size%x*}
+  local h=${size#*x}
+  adb shell input tap $((w/2)) $((h/2))
+}
+
 swipe_seekbar() {
   local direction="$1"
-  adb shell uiautomator dump /sdcard/nt-window.xml >/dev/null 2>&1 || true
-  adb exec-out cat /sdcard/nt-window.xml > /tmp/nt-window.xml 2>/dev/null || true
+  dump_ui
   local coords
   coords=$(python3 - "$direction" <<'PY'
 import re, sys, xml.etree.ElementTree as ET
@@ -71,16 +104,44 @@ PY
   adb shell input swipe "$x1" "$y1" "$x2" "$y2" 220
 }
 
+assert_landscape_video_not_stretched() {
+  # The test clip is solid lime, making its visible TextureView rectangle easy
+  # to identify in a device screenshot. A 16:9 clip shown in portrait must stay
+  # roughly 16:9 with black letterbox space; the old bug stretched it vertically.
+  adb exec-out screencap -p > /tmp/nt-aspect.png
+  read -r shot_w shot_h < <(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=' ' /tmp/nt-aspect.png)
+  ffmpeg -hide_banner -loglevel error -y -i /tmp/nt-aspect.png -f rawvideo -pix_fmt rgb24 /tmp/nt-aspect.rgb
+  python3 - "$shot_w" "$shot_h" <<'PY'
+import sys
+w,h=map(int,sys.argv[1:3])
+data=open('/tmp/nt-aspect.rgb','rb').read()
+if len(data) < w*h*3:
+    raise SystemExit('SMOKE FAILURE: incomplete screenshot RGB data')
+xs=[]; ys=[]
+for y in range(h):
+    row=y*w*3
+    for x in range(w):
+        i=row+x*3
+        r,g,b=data[i:i+3]
+        # H.264/YUV round-trip means lime is not necessarily exact #00ff00.
+        if g > 150 and g > r*1.8 and g > b*1.8:
+            xs.append(x); ys.append(y)
+if len(xs) < w*h*0.03:
+    raise SystemExit('SMOKE FAILURE: landscape test video was not visibly rendered')
+bw=max(xs)-min(xs)+1
+bh=max(ys)-min(ys)+1
+ratio=bw/bh
+print(f'Landscape video bbox: {bw}x{bh}, aspect={ratio:.3f}')
+if not (1.60 <= ratio <= 1.95):
+    raise SystemExit(f'SMOKE FAILURE: 16:9 video rendered stretched; visible aspect={ratio:.3f}')
+PY
+}
+
 echo "Installing emulator image..."
-# setup-android has already accepted licenses. Do not pipe infinite `yes` into
-# sdkmanager under `pipefail`: sdkmanager can succeed, close stdin, and make
-# `yes` die with SIGPIPE, falsely failing the release gate.
 sdkmanager --install "$IMAGE" >/dev/null
 [[ -d "$IMAGE_DIR" ]] || fail "emulator image was not installed at $IMAGE_DIR"
 printf 'no\n' | avdmanager create avd --force -n "$AVD_NAME" -k "$IMAGE" >/dev/null
 
-# GitHub hosted Linux runners normally expose KVM. Fall back to software
-# acceleration rather than silently skipping runtime validation.
 ACCEL="-accel off"
 if [[ -e /dev/kvm ]]; then
   sudo chmod 666 /dev/kvm || true
@@ -104,13 +165,14 @@ adb install -r "$APK" >/dev/null
 adb shell pm grant com.neurontap.app android.permission.READ_MEDIA_VIDEO || true
 adb shell pm grant com.neurontap.app android.permission.READ_MEDIA_IMAGES || true
 
-# Generate the exact kind of pathological duration that exposed the v0.7
-# player: a sub-second H.264 loop. Visual content is irrelevant to decoder/lifecycle stress.
 if ! command -v ffmpeg >/dev/null 2>&1; then
   sudo apt-get update -qq
   sudo apt-get install -y -qq ffmpeg
 fi
-ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=360x640:rate=30 -t 0.80 -c:v libx264 -pix_fmt yuv420p /tmp/nt-loop.mp4
+
+# Exact class of media that exposed the catastrophic presentation bug: a
+# sub-second LANDSCAPE 16:9 H.264 loop. Solid lime lets us assert visual aspect.
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i color=c=lime:size=640x360:rate=30 -t 0.80 -c:v libx264 -pix_fmt yuv420p /tmp/nt-loop.mp4
 adb shell mkdir -p /sdcard/Movies
 adb push /tmp/nt-loop.mp4 /sdcard/Movies/nt_v8_loop.mp4 >/dev/null
 adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Movies/nt_v8_loop.mp4 >/dev/null
@@ -127,8 +189,8 @@ for desc in Videos Favorites Albums Gallery Videos; do
   sleep 0.25
   assert_alive "tab navigation to $desc"
 done
+assert_selected_tab "Videos"
 
-# Open the pathological short video by accessibility label.
 opened=0
 for _ in $(seq 1 20); do
   if tap_desc "nt_v8_loop.mp4"; then opened=1; break; fi
@@ -137,6 +199,17 @@ done
 [[ "$opened" == "1" ]] || fail "could not locate pathological short-loop video"
 sleep 2
 assert_alive "opening short-loop video"
+
+# Duration must no longer lie as 0:00 / 0:00 for sub-second clips.
+assert_ui_contains "0.8s"
+
+# Hide controls and verify the actual rendered video rectangle, not just that
+# the process survived. This is the regression the previous QA completely missed.
+screen_center_tap
+sleep 0.5
+assert_landscape_video_not_stretched
+screen_center_tap
+sleep 0.5
 
 # Let it cross its repeat boundary many times before touching anything.
 sleep 8
@@ -151,8 +224,7 @@ for i in $(seq 1 24); do
   assert_alive "rapid pause/play iteration $i"
 done
 
-# Scrub both directions several times when Compose exposes Slider as SeekBar.
-# Fail if it never appears: timeline interaction is a release-blocking video path.
+# Scrub both directions several times. Timeline interaction is release-blocking.
 seek_seen=0
 for i in $(seq 1 8); do
   if swipe_seekbar forward; then seek_seen=1; fi
@@ -164,25 +236,34 @@ for i in $(seq 1 8); do
 done
 [[ "$seek_seen" == "1" ]] || fail "video timeline SeekBar was not accessible"
 
-# Repeated orientation recreation was a direct v0.7 crash reproducer.
+# Rotation must preserve the viewer, controls and active media, not merely keep
+# the process alive while dumping the user back into Gallery.
 adb shell settings put system accelerometer_rotation 0
 for i in $(seq 1 8); do
   adb shell settings put system user_rotation 1
   sleep 0.6
   assert_alive "landscape rotation $i"
+  if tap_desc "Pause"; then tap_desc "Play" || true; elif tap_desc "Play"; then tap_desc "Pause" || true; else fail "video controls vanished after landscape rotation $i"; fi
   adb shell settings put system user_rotation 0
   sleep 0.6
   assert_alive "portrait rotation $i"
-  if tap_desc "Pause"; then tap_desc "Play" || true; elif tap_desc "Play"; then tap_desc "Pause" || true; fi
-  assert_alive "post-rotation playback $i"
+  if tap_desc "Pause"; then tap_desc "Play" || true; elif tap_desc "Play"; then tap_desc "Pause" || true; else fail "video controls vanished after portrait rotation $i"; fi
 done
 
-# Background/reopen must not poison the player or cold-start media state.
+# Back out after rotation and verify origin context is still Videos.
+tap_desc "Back" || fail "viewer Back control disappeared"
+sleep 1
+assert_selected_tab "Videos"
+
+# Reopen and verify background/foreground does not poison player state.
+tap_desc "nt_v8_loop.mp4" || fail "could not reopen loop video after navigation test"
+sleep 1
 adb shell input keyevent 3
 sleep 2
 assert_alive "backgrounding"
 adb shell am start -W -n com.neurontap.app/.MainActivity >/dev/null
 sleep 2
 assert_alive "foreground return"
+if ! tap_desc "Pause" && ! tap_desc "Play"; then fail "viewer/player context lost after foreground return"; fi
 
-echo "NeuronTap v0.8 emulator smoke test passed."
+echo "NeuronTap v0.8.1 emulator smoke test passed."
