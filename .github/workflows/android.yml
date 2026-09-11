@@ -110,6 +110,12 @@ jobs:
       - name: Harden emulator boot probe
         run: python3 tools/fix_v8_emulator_boot.py
 
+      - name: Apply v0.8.1 live MediaStore indexing repair
+        run: python3 tools/apply_v8_indexing_repair.py
+
+      - name: Harden v0.8.1 MediaStore smoke
+        run: python3 tools/harden_v8_smoke_v2.py
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
