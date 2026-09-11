@@ -104,11 +104,29 @@ jobs:
       - name: Apply v0.8 targeted lint opt-ins
         run: python3 tools/fix_v8_lint.py
 
+      # The v0.8.1 repair line shipped as versionCode 10. Field-test builds on
+      # this main v0.8 line must stay above that so Android accepts an in-place
+      # update and preserves the user's existing NeuronTap database/preferences.
+      - name: Set v0.8.2 update identity
+        run: |
+          sed -i 's/versionCode = 8/versionCode = 11/' app/build.gradle.kts
+          sed -i 's/versionName = "0.8.0"/versionName = "0.8.2"/' app/build.gradle.kts
+          grep -q 'versionCode = 11' app/build.gradle.kts
+          grep -q 'versionName = "0.8.2"' app/build.gradle.kts
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
       - name: Android lint
         run: gradle :app:lintDebug --stacktrace
+
+      - name: Verify update identity and signature
+        run: |
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          "$AAPT" dump badging app/build/outputs/apk/debug/app-debug.apk | tee /tmp/badging.txt
+          grep -q "package: name='com.neurontap.app' versionCode='11' versionName='0.8.2'" /tmp/badging.txt
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk
 
       # Publish the exact candidate that passed compilation + lint before the
       # expensive emulator abuse pass. The workflow itself is still only green
@@ -117,7 +135,7 @@ jobs:
       - name: Upload candidate APK
         uses: actions/upload-artifact@v4
         with:
-          name: neurontap-v0.8-apk
+          name: neurontap-v0.8.2-apk
           path: app/build/outputs/apk/debug/app-debug.apk
 
       - name: Emulator torture smoke test
