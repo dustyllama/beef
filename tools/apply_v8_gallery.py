@@ -19,6 +19,10 @@ s = s.replace('import androidx.compose.runtime.Composable\n', 'import androidx.c
 s = s.replace('import androidx.compose.ui.layout.onGloballyPositioned\n', 'import androidx.compose.ui.layout.onGloballyPositioned\nimport androidx.compose.ui.layout.onSizeChanged\n', 1)
 s = s.replace('import androidx.compose.ui.platform.LocalContext\n', 'import androidx.compose.ui.platform.LocalContext\nimport androidx.compose.ui.platform.LocalDensity\n', 1)
 
+# Product terminology is Gallery, not the old internal "All" label. Keep the
+# accessibility surface aligned so automated and human navigation say the same thing.
+rep('Icon(Icons.Default.PhotoLibrary, "All")', 'Icon(Icons.Default.PhotoLibrary, "Gallery")', 'gallery tab semantics')
+
 # Screen-level arbitration and deliberate sort reset.
 anchor = '    var interactionScores by remember { mutableStateOf<Map<Long, Double>>(emptyMap()) }\n'
 rep(anchor, anchor + '    var albumDragActive by remember { mutableStateOf(false) }\n    var sortResetNonce by remember { mutableIntStateOf(0) }\n', 'screen gesture state')
