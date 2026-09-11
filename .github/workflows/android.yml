@@ -2,13 +2,13 @@ name: Android Debug APK
 
 on:
   push:
-    branches: [ master, main, neurontap-build, aves-v2, horny-archives-v3, neurontap-v4, neurontap-v5-rc1, neurontap-v6, neurontap-v7, neurontap-v8 ]
+    branches: [ master, main, neurontap-build, aves-v2, horny-archives-v3, neurontap-v4, neurontap-v5-rc1, neurontap-v6, neurontap-v7, neurontap-v8, neurontap-v8-repair ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -101,21 +101,30 @@ jobs:
       - name: Apply v0.8 targeted lint opt-ins
         run: python3 tools/fix_v8_lint.py
 
+      - name: Apply v0.8.1 catastrophic repair
+        run: python3 tools/apply_v8_repair.py
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
       - name: Android lint
         run: gradle :app:lintDebug --stacktrace
 
-      # Publish the exact candidate that passed compilation + lint before the
-      # expensive emulator abuse pass. The workflow itself is still only green
-      # if the torture test passes, but a field-test APK is not held hostage by
-      # emulator infrastructure/setup failures.
-      - name: Upload candidate APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: neurontap-v0.8-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Verify repair identity and signature
+        run: |
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          "$AAPT" dump badging app/build/outputs/apk/debug/app-debug.apk | tee /tmp/badging.txt
+          grep -q "package: name='com.neurontap.app' versionCode='10' versionName='0.8.1-repair'" /tmp/badging.txt
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk
 
       - name: Emulator torture smoke test
         run: bash tools/v8_emulator_smoke.sh app/build/outputs/apk/debug/app-debug.apk
+
+      # Do not publish a candidate merely because it compiled. The artifact is
+      # exposed only after lint, package/signature verification and runtime abuse.
+      - name: Upload QA-passed repair APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: neurontap-v0.8.1-repair-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
