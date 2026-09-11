@@ -17,6 +17,27 @@ dump_emulator_log() {
   tail -n 200 /tmp/nt-emulator.log >&2 2>/dev/null || true
   echo "------------------------" >&2
 }
+dump_accessibility() {
+  adb shell uiautomator dump /sdcard/nt-window.xml >/dev/null 2>&1 || true
+  adb exec-out cat /sdcard/nt-window.xml > /tmp/nt-window.xml 2>/dev/null || true
+  echo "----- accessibility snapshot -----" >&2
+  python3 - <<'PY' >&2 2>/dev/null || true
+import xml.etree.ElementTree as ET
+try:
+    root = ET.parse('/tmp/nt-window.xml').getroot()
+except Exception as exc:
+    print(f"unable to parse UI XML: {exc}")
+else:
+    for node in root.iter('node'):
+        desc = node.attrib.get('content-desc','').strip()
+        text = node.attrib.get('text','').strip()
+        cls = node.attrib.get('class','')
+        bounds = node.attrib.get('bounds','')
+        if desc or text:
+            print(f"class={cls} text={text!r} desc={desc!r} bounds={bounds}")
+PY
+  echo "----------------------------------" >&2
+}
 
 # Accessibility-first tap helper. Keeps the test independent of a particular
 # emulator resolution and catches basic Compose navigation regressions.
@@ -46,6 +67,17 @@ PY
   ) || return 1
   read -r x y <<<"$xy"
   adb shell input tap "$x" "$y"
+}
+
+tap_desc_retry() {
+  local needle="$1"
+  local attempts="${2:-6}"
+  for _ in $(seq 1 "$attempts"); do
+    if tap_desc "$needle"; then return 0; fi
+    sleep 0.35
+  done
+  dump_accessibility
+  return 1
 }
 
 swipe_seekbar() {
@@ -78,6 +110,11 @@ PY
   read -r x1 y1 x2 y2 <<<"$coords"
   adb shell input swipe "$x1" "$y1" "$x2" "$y2" 220
 }
+
+# The v0.8 patch pipeline must expose the product-facing Gallery label. Keep
+# this separate from runtime navigation so an accessibility timing issue cannot
+# accidentally hide a terminology regression.
+grep -Fq 'Icon(Icons.Default.PhotoLibrary, "Gallery")' app/src/main/java/com/neurontap/app/GalleryUi.kt || fail "patched Gallery tab semantics are missing"
 
 echo "Installing emulator image..."
 # setup-android has already accepted licenses. Do not pipe infinite `yes` into
@@ -162,8 +199,10 @@ sleep 5
 assert_alive "cold start"
 
 # Exercise the exact cold-start tab path that previously queued multiple swipes.
+# Compose semantics can briefly disappear while a destination is recomposing, so
+# retry each lookup instead of turning one transient UI dump into a false failure.
 for desc in Videos Favorites Albums Gallery Videos; do
-  tap_desc "$desc" || fail "could not locate $desc tab"
+  tap_desc_retry "$desc" || fail "could not locate $desc tab"
   sleep 0.25
   assert_alive "tab navigation to $desc"
 done
@@ -174,7 +213,7 @@ for _ in $(seq 1 20); do
   if tap_desc "nt_v8_loop.mp4"; then opened=1; break; fi
   sleep 1
 done
-[[ "$opened" == "1" ]] || fail "could not locate pathological short-loop video"
+[[ "$opened" == "1" ]] || { dump_accessibility; fail "could not locate pathological short-loop video"; }
 sleep 2
 assert_alive "opening short-loop video"
 
@@ -184,9 +223,9 @@ assert_alive "repeated sub-second looping"
 
 # Hammer pause/play while the loop repeatedly crosses its end boundary.
 for i in $(seq 1 24); do
-  if tap_desc "Pause"; then :; elif tap_desc "Play"; then :; else fail "play/pause control disappeared at iteration $i"; fi
+  if tap_desc "Pause"; then :; elif tap_desc "Play"; then :; else dump_accessibility; fail "play/pause control disappeared at iteration $i"; fi
   sleep 0.10
-  if tap_desc "Play"; then :; elif tap_desc "Pause"; then :; else fail "play/pause control disappeared after toggle $i"; fi
+  if tap_desc "Play"; then :; elif tap_desc "Pause"; then :; else dump_accessibility; fail "play/pause control disappeared after toggle $i"; fi
   sleep 0.10
   assert_alive "rapid pause/play iteration $i"
 done
@@ -202,7 +241,7 @@ for i in $(seq 1 8); do
   sleep 0.15
   assert_alive "backward scrub $i"
 done
-[[ "$seek_seen" == "1" ]] || fail "video timeline SeekBar was not accessible"
+[[ "$seek_seen" == "1" ]] || { dump_accessibility; fail "video timeline SeekBar was not accessible"; }
 
 # Repeated orientation recreation was a direct v0.7 crash reproducer.
 adb shell settings put system accelerometer_rotation 0
