@@ -139,23 +139,19 @@ p.write_text(s)
 
 # ---------------------------------------------------------------------------
 # Thumbnail requests: bound decode size and give Coil stable cache identities.
-# Rebuilding full-resolution video-frame requests while flinging the Videos tab
-# is needless work and was visible as large black thumbnail deserts.
+# Earlier version scripts also touch this function, so patch the model block by
+# structural boundaries instead of assuming one exact historical string.
 # ---------------------------------------------------------------------------
 p = ROOT / "app/src/main/java/com/neurontap/app/MediaThumbnail.kt"
 s = p.read_text()
 if "import androidx.compose.runtime.remember\n" not in s:
+    if "import androidx.compose.runtime.Composable\n" not in s:
+        raise RuntimeError("v8 repair thumbnail composable import missing")
     s = s.replace("import androidx.compose.runtime.Composable\n", "import androidx.compose.runtime.Composable\nimport androidx.compose.runtime.remember\n", 1)
-old_model = '''    val model: Any = if (item.isVideo) {
-        ImageRequest.Builder(context)
-            .data(Uri.parse(item.uri))
-            .decoderFactory(VideoFrameDecoder.Factory())
-            .crossfade(false)
-            .build()
-    } else {
-        Uri.parse(item.uri)
-    }
-'''
+start = s.find("    val model: Any = ")
+end = s.find("    AsyncImage(", start)
+if start < 0 or end < 0:
+    raise RuntimeError("v8 repair thumbnail model boundaries missing")
 new_model = '''    val model: Any = remember(item.id, item.uri, item.modified, item.isVideo) {
         if (item.isVideo) {
             val cacheKey = "video-thumb:${item.id}:${item.modified}"
@@ -172,9 +168,7 @@ new_model = '''    val model: Any = remember(item.id, item.uri, item.modified, i
         }
     }
 '''
-if old_model not in s:
-    raise RuntimeError("v8 repair thumbnail model anchor missing")
-s = s.replace(old_model, new_model, 1)
+s = s[:start] + new_model + s[end:]
 p.write_text(s)
 
 print("Applied v0.8.1 catastrophic video/navigation repair")
