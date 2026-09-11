@@ -1,145 +1,11 @@
 from pathlib import Path
 
-p = Path(__file__).resolve().parent / "v8_emulator_smoke.sh"
-s = p.read_text()
-
-old_create = '''printf 'no\\n' | avdmanager create avd --force -n "$AVD_NAME" -k "$IMAGE" >/dev/null
-
-ACCEL="-accel off"
-'''
-new_create = '''# Keep avdmanager and the current emulator on the exact same AVD directory.
-# New Android emulator builds do not reliably discover AVDs through the legacy
-# SDK-home fallback used by older command-line tools.
-export ANDROID_AVD_HOME="${RUNNER_TEMP:-/tmp}/neurontap-avd"
-mkdir -p "$ANDROID_AVD_HOME"
-rm -rf "$ANDROID_AVD_HOME/$AVD_NAME.avd" "$ANDROID_AVD_HOME/$AVD_NAME.ini"
-printf 'no\\n' | avdmanager create avd --force -n "$AVD_NAME" -k "$IMAGE" >/dev/null
-
-EMULATOR_BIN="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}/emulator/emulator"
-[[ -x "$EMULATOR_BIN" ]] || fail "Android emulator binary missing at $EMULATOR_BIN"
-if ! "$EMULATOR_BIN" -list-avds | grep -Fxq "$AVD_NAME"; then
-  echo "---- AVD directory ----" >&2
-  find "$ANDROID_AVD_HOME" -maxdepth 2 -type f -print >&2 || true
-  echo "---- avdmanager list ----" >&2
-  avdmanager list avd >&2 || true
-  fail "created AVD is not visible to emulator"
-fi
-
-ACCEL="-accel off"
-'''
-if old_create not in s:
-    raise SystemExit("AVD creation anchor not found")
-s = s.replace(old_create, new_create, 1)
-
-old_boot = '''emulator -avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -no-metrics $ACCEL > /tmp/nt-emulator.log 2>&1 &
-EMU_PID=$!
-trap 'kill "$EMU_PID" 2>/dev/null || true' EXIT
-
-adb wait-for-device
-for _ in $(seq 1 180); do
-  [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\\r')" == "1" ]] && break
-  sleep 2
-done
-[[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\\r')" == "1" ]] || fail "emulator did not boot"
-'''
-new_boot = '''"$EMULATOR_BIN" -avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader -no-metrics $ACCEL > /tmp/nt-emulator.log 2>&1 &
-EMU_PID=$!
-trap 'kill "$EMU_PID" 2>/dev/null || true' EXIT
-
-# Bound device discovery so emulator startup failures cannot strand the CI job.
-DEVICE_READY=0
-for _ in $(seq 1 90); do
-  if ! kill -0 "$EMU_PID" 2>/dev/null; then
-    echo "---- emulator startup log ----" >&2
-    tail -200 /tmp/nt-emulator.log >&2 || true
-    fail "emulator process exited before adb registration"
-  fi
-  if adb devices | awk 'NR > 1 && $2 == "device" { found=1 } END { exit(found ? 0 : 1) }'; then
-    DEVICE_READY=1
-    break
-  fi
-  sleep 2
-done
-if [[ "$DEVICE_READY" != "1" ]]; then
-  echo "---- emulator startup log ----" >&2
-  tail -200 /tmp/nt-emulator.log >&2 || true
-  fail "emulator never registered with adb"
-fi
-
-BOOT_READY=0
-for _ in $(seq 1 180); do
-  if ! kill -0 "$EMU_PID" 2>/dev/null; then
-    echo "---- emulator boot log ----" >&2
-    tail -200 /tmp/nt-emulator.log >&2 || true
-    fail "emulator process exited during Android boot"
-  fi
-  if [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\\r')" == "1" ]]; then
-    BOOT_READY=1
-    break
-  fi
-  sleep 2
-done
-if [[ "$BOOT_READY" != "1" ]]; then
-  echo "---- emulator boot log ----" >&2
-  tail -200 /tmp/nt-emulator.log >&2 || true
-  fail "emulator did not complete Android boot"
-fi
-'''
-if old_boot not in s:
-    raise SystemExit("emulator boot block anchor not found")
-s = s.replace(old_boot, new_boot, 1)
-
-# The first gallery tab is icon-only and currently exposes the accessibility
-# label "All". Keep the smoke test aligned with the actual Compose semantics.
-old_tabs = 'for desc in Videos Favorites Albums Gallery Videos; do'
-new_tabs = 'for desc in Videos Favorites Albums All Videos; do'
-if old_tabs not in s:
-    raise SystemExit("tab navigation anchor not found")
-s = s.replace(old_tabs, new_tabs, 1)
-
-# Compose NavigationBarItem does not reliably expose selected=true through
-# UIAutomator. Verify the Videos context by its actual media content instead.
-old_contains = '''assert_ui_contains() {
-  local needle="$1"
-  dump_ui
-  grep -Fq "$needle" /tmp/nt-window.xml || fail "UI did not contain expected text: $needle"
-}
-'''
-new_contains = '''assert_ui_contains() {
-  local needle="$1"
-  dump_ui
-  grep -Fq "$needle" /tmp/nt-window.xml || fail "UI did not contain expected text: $needle"
-}
-
-wait_ui_contains() {
-  local needle="$1"
-  local attempts="${2:-20}"
-  for _ in $(seq 1 "$attempts"); do
-    dump_ui
-    if grep -Fq "$needle" /tmp/nt-window.xml; then
-      return 0
-    fi
-    sleep 1
-  done
-  fail "UI did not contain expected text after waiting: $needle"
-}
-'''
-if old_contains not in s:
-    raise SystemExit("UI assertion anchor not found")
-s = s.replace(old_contains, new_contains, 1)
-
-selected_check = 'assert_selected_tab "Videos"'
-if s.count(selected_check) != 2:
-    raise SystemExit(f"expected two Videos selected checks, found {s.count(selected_check)}")
-s = s.replace(selected_check, 'wait_ui_contains "nt_v8_loop.mp4"')
-
-p.write_text(s)
-
-# Media tiles were clickable but unnamed to Android accessibility services.
-# Give every thumbnail its real media name. This improves TalkBack/accessibility
-# and gives the smoke test a stable semantic locator instead of screen pixels.
+# The v0.8.3 evidence-based smoke harness already owns emulator boot, tab
+# navigation, and runtime waiting. This helper only needs to expose stable
+# media-tile accessibility labels so QA can locate actual gallery items.
 gallery = Path(__file__).resolve().parents[1] / "app/src/main/java/com/neurontap/app/GalleryUi.kt"
 g = gallery.read_text()
+
 import_anchor = 'import androidx.compose.ui.platform.LocalDensity\n'
 semantics_imports = import_anchor + 'import androidx.compose.ui.semantics.contentDescription\nimport androidx.compose.ui.semantics.semantics\n'
 if 'import androidx.compose.ui.semantics.semantics\n' not in g:
@@ -153,6 +19,6 @@ if tile_semantic not in g:
     if tile_anchor not in g:
         raise SystemExit("GalleryUi media tile semantics anchor not found")
     g = g.replace(tile_anchor, tile_semantic, 1)
-gallery.write_text(g)
 
-print("Hardened v0.8.1 emulator QA and exposed media names to accessibility services")
+gallery.write_text(g)
+print("Exposed media names to accessibility services for v0.8.3 QA")
