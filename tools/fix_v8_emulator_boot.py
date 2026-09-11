@@ -3,17 +3,17 @@ from pathlib import Path
 p = Path(__file__).resolve().parent / "v8_emulator_smoke.sh"
 s = p.read_text()
 
-old_create = '''printf 'no\\n' | avdmanager create avd --force -n "$AVD_NAME" -k "$IMAGE"
+old_create = '''printf 'no\\n' | avdmanager create avd --force -n "$AVD_NAME" -k "$IMAGE" >/dev/null
 
 ACCEL="-accel off"
 '''
 new_create = '''# Keep avdmanager and the current emulator on the exact same AVD directory.
-# New Android emulator builds no longer reliably discover AVDs created by older
-# command-line tools through their legacy SDK-home fallback.
+# New Android emulator builds do not reliably discover AVDs through the legacy
+# SDK-home fallback used by older command-line tools.
 export ANDROID_AVD_HOME="${RUNNER_TEMP:-/tmp}/neurontap-avd"
 mkdir -p "$ANDROID_AVD_HOME"
 rm -rf "$ANDROID_AVD_HOME/$AVD_NAME.avd" "$ANDROID_AVD_HOME/$AVD_NAME.ini"
-printf 'no\\n' | avdmanager create avd --force -n "$AVD_NAME" -k "$IMAGE"
+printf 'no\\n' | avdmanager create avd --force -n "$AVD_NAME" -k "$IMAGE" >/dev/null
 
 EMULATOR_BIN="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}/emulator/emulator"
 [[ -x "$EMULATOR_BIN" ]] || fail "Android emulator binary missing at $EMULATOR_BIN"
@@ -46,9 +46,7 @@ new_boot = '''"$EMULATOR_BIN" -avd "$AVD_NAME" -no-window -no-audio -no-boot-ani
 EMU_PID=$!
 trap 'kill "$EMU_PID" 2>/dev/null || true' EXIT
 
-# Never let adb wait-for-device hang the entire CI job. New emulator releases can
-# fail before registering with adb, so bound discovery, verify the emulator is
-# still alive, and surface its own log immediately when startup goes wrong.
+# Bound device discovery so emulator startup failures cannot strand the CI job.
 DEVICE_READY=0
 for _ in $(seq 1 90); do
   if ! kill -0 "$EMU_PID" 2>/dev/null; then
