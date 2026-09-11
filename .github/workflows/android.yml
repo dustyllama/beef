@@ -8,7 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 75
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -101,18 +101,33 @@ jobs:
       - name: Repair v0.8 live MediaStore indexing
         run: python3 tools/apply_v8_indexing_repair.py
 
+      - name: Apply v0.8.3 viewer and navigation repair
+        run: python3 tools/apply_v8_repair_mainline.py
+
+      - name: Apply v0.8.3 provider video thumbnails
+        run: python3 tools/apply_v8_thumbnail_repair.py
+
       - name: Apply v0.8 targeted lint opt-ins
         run: python3 tools/fix_v8_lint.py
 
-      # The v0.8.1 repair line shipped as versionCode 10. Field-test builds on
-      # this main v0.8 line must stay above that so Android accepts an in-place
-      # update and preserves the user's existing NeuronTap database/preferences.
-      - name: Set v0.8.2 update identity
+      - name: Harden emulator boot probe
+        run: python3 tools/fix_v8_emulator_boot.py
+
+      - name: Harden MediaStore QA
+        run: python3 tools/harden_v8_smoke_v2.py
+
+      - name: Fix smoke screenshot parsing
+        run: python3 tools/fix_v8_smoke_ffprobe.py
+
+      - name: Make aspect QA isolate actual video pixels
+        run: python3 tools/fix_v8_smoke_aspect_probe.py
+
+      - name: Set v0.8.3 update identity
         run: |
-          sed -i 's/versionCode = 8/versionCode = 11/' app/build.gradle.kts
-          sed -i 's/versionName = "0.8.0"/versionName = "0.8.2"/' app/build.gradle.kts
-          grep -q 'versionCode = 11' app/build.gradle.kts
-          grep -q 'versionName = "0.8.2"' app/build.gradle.kts
+          sed -i 's/versionCode = 8/versionCode = 12/' app/build.gradle.kts
+          sed -i 's/versionName = "0.8.0"/versionName = "0.8.3"/' app/build.gradle.kts
+          grep -q 'versionCode = 12' app/build.gradle.kts
+          grep -q 'versionName = "0.8.3"' app/build.gradle.kts
 
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
@@ -125,18 +140,33 @@ jobs:
           AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
           APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
           "$AAPT" dump badging app/build/outputs/apk/debug/app-debug.apk | tee /tmp/badging.txt
-          grep -q "package: name='com.neurontap.app' versionCode='11' versionName='0.8.2'" /tmp/badging.txt
+          grep -q "package: name='com.neurontap.app' versionCode='12' versionName='0.8.3'" /tmp/badging.txt
           "$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk
 
-      # Publish the exact candidate that passed compilation + lint before the
-      # expensive emulator abuse pass. The workflow itself is still only green
-      # if the torture test passes, but a field-test APK is not held hostage by
-      # emulator infrastructure/setup failures.
-      - name: Upload candidate APK
+      - name: Deterministic emulator torture QA
+        timeout-minutes: 25
+        run: bash -x tools/v8_emulator_smoke_v2.sh app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Collect failed emulator QA evidence
+        if: failure()
+        run: |
+          mkdir -p qa-diagnostics
+          cp /tmp/nt-*.png qa-diagnostics/ 2>/dev/null || true
+          cp /tmp/nt-*.xml qa-diagnostics/ 2>/dev/null || true
+          cp /tmp/nt-emulator.log qa-diagnostics/ 2>/dev/null || true
+          cp /tmp/badging.txt qa-diagnostics/ 2>/dev/null || true
+          find qa-diagnostics -maxdepth 1 -type f -printf '%f\n' | sort || true
+
+      - name: Upload failed emulator QA evidence
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: neurontap-v0.8.2-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: neurontap-v0.8.3-qa-failure-evidence
+          path: qa-diagnostics
+          if-no-files-found: warn
 
-      - name: Emulator torture smoke test
-        run: bash tools/v8_emulator_smoke.sh app/build/outputs/apk/debug/app-debug.apk
+      - name: Upload QA-passed v0.8.3 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: neurontap-v0.8.3-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
